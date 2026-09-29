@@ -70,6 +70,17 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         }
     }
 
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        guard !sidebarCollapsed, splitView.bounds.width > 0 else { return }
+
+        let maximumSidebarWidth = min(340, max(250, splitView.bounds.width - 420))
+        let targetWidth = min(max(sidebarWidth, 250), maximumSidebarWidth)
+        if abs(sidebar.view.frame.width - targetWidth) > 0.5 {
+            splitView.setPosition(targetWidth, ofDividerAt: 0)
+        }
+    }
+
     func installToolbar(in window: NSWindow) {
         guard window.toolbar == nil else { return }
         let toolbar = NSToolbar(identifier: "agentbox-client.main")
@@ -92,7 +103,8 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         sidebar.setStatus("正在读取项目…")
         Task { @MainActor in
             do {
-                sidebar.setProjects(try await client.projects(in: workspace))
+                let projects = try await client.projects(in: workspace)
+                sidebar.setProjects(projects)
             } catch {
                 sidebar.setProjects([])
                 sidebar.setStatus("读取项目失败：\(error.localizedDescription)")
@@ -113,22 +125,27 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
 
     private func chooseLocalRoot() {
         guard let workspace else { return }
+        syncManager?.stop()
+        syncManager = nil
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = true
         panel.prompt = "选择"
-        panel.message = "选择 \(workspace.name) 的本地项目根目录"
+        panel.message = "选择或修改 \(workspace.name) 的本地项目根目录"
+        if let current = UserDefaults.standard.string(forKey: localRootKey(workspace)) {
+            panel.directoryURL = URL(fileURLWithPath: current, isDirectory: true)
+        }
         guard panel.runModal() == .OK, let url = panel.url else { return }
         UserDefaults.standard.set(url.path, forKey: localRootKey(workspace))
         sidebar.setLocalRoot(url.path)
-        if let policy = chooseInitialPolicy(workspace) {
+        let savedPolicy = UserDefaults.standard.string(forKey: initialPolicyKey(workspace))
+        if let policy = savedPolicy ?? chooseInitialPolicy(workspace) {
             UserDefaults.standard.set(policy, forKey: initialPolicyKey(workspace))
             startSync(workspace, localRoot: url)
         } else {
-            syncManager?.stop()
-            syncManager = nil
+            sidebar.setStatus("已修改同步目录，等待选择同步方式")
         }
     }
 
@@ -261,5 +278,13 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         canCollapseSubview subview: NSView
     ) -> Bool {
         subview === sidebar.view
+    }
+
+    func splitViewDidResizeSubviews(_ notification: Notification) {
+        guard !sidebarCollapsed else { return }
+        let width = sidebar.view.frame.width
+        if width >= 249.5, width <= 340.5 {
+            sidebarWidth = width
+        }
     }
 }

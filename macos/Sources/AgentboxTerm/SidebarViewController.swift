@@ -12,6 +12,7 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     private let emptyState = NSStackView()
     private let projectCount = NSTextField(labelWithString: "0")
     private let localRoot = NSTextField(labelWithString: "尚未选择")
+    private let chooseRootButton = NSButton(title: "选择目录", target: nil, action: nil)
     private let status = NSTextField(labelWithString: "正在连接…")
     private var workspaces: [Workspace] = []
     private var projects: [RemoteProject] = []
@@ -147,6 +148,7 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     func setLocalRoot(_ path: String?) {
         localRoot.stringValue = path ?? "尚未选择"
         localRoot.toolTip = path
+        chooseRootButton.title = path == nil ? "选择目录" : "修改目录"
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int {
@@ -256,8 +258,18 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
         localRoot.font = .systemFont(ofSize: 12, weight: .medium)
         localRoot.textColor = NativeTheme.primaryText
         localRoot.lineBreakMode = .byTruncatingMiddle
-        let button = textButton("选择目录", symbol: "folder", action: #selector(chooseLocalRoot))
-        let stack = NSStackView(views: [title, localRoot, button])
+        localRoot.isSelectable = true
+        localRoot.toolTip = "双击选择或修改本地同步目录"
+        chooseRootButton.target = self
+        chooseRootButton.action = #selector(chooseLocalRoot)
+        chooseRootButton.image = NativeTheme.symbol("folder", size: 12, weight: .semibold)
+        chooseRootButton.imagePosition = .imageLeading
+        chooseRootButton.bezelStyle = .rounded
+        chooseRootButton.controlSize = .small
+        chooseRootButton.font = .systemFont(ofSize: 12, weight: .medium)
+        localRoot.target = self
+        localRoot.action = #selector(chooseLocalRoot)
+        let stack = NSStackView(views: [title, localRoot, chooseRootButton])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 7
