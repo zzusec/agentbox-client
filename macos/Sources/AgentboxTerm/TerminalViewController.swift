@@ -3,13 +3,13 @@ import SwiftTerm
 
 final class TerminalViewController: NSViewController, TerminalViewDelegate {
     let workspace: Workspace
-    let project: FileEntry
+    let project: RemoteProject
 
     private let client: AgentboxClient
     private let surface: TerminalSurface
     private var bridge: TerminalBridge?
 
-    init(client: AgentboxClient, workspace: Workspace, project: FileEntry) {
+    init(client: AgentboxClient, workspace: Workspace, project: RemoteProject) {
         self.client = client
         self.workspace = workspace
         self.project = project

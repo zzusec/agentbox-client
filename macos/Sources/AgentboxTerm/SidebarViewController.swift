@@ -2,16 +2,18 @@ import AppKit
 
 final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
     var onSelectWorkspace: ((Workspace) -> Void)?
-    var onSelectProject: ((FileEntry) -> Void)?
+    var onSelectProject: ((RemoteProject) -> Void)?
     var onChooseLocalRoot: (() -> Void)?
+    var onCreateProject: (() -> Void)?
 
     private let workspacePicker = NSPopUpButton()
     private let table = NSTableView()
     private let localRoot = NSTextField(labelWithString: "尚未选择同步目录")
     private let chooseRootButton = NSButton(title: "选择同步目录", target: nil, action: nil)
+    private let createProjectButton = NSButton(title: "新建项目", target: nil, action: nil)
     private let status = NSTextField(labelWithString: "正在连接…")
     private var workspaces: [Workspace] = []
-    private var projects: [FileEntry] = []
+    private var projects: [RemoteProject] = []
 
     override func loadView() {
         let root = NSView()
@@ -52,10 +54,15 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
         chooseRootButton.action = #selector(chooseLocalRoot)
         chooseRootButton.bezelStyle = .rounded
 
+        createProjectButton.target = self
+        createProjectButton.action = #selector(createProject)
+        createProjectButton.bezelStyle = .rounded
+
         let stack = NSStackView(views: [
             workspaceLabel,
             workspacePicker,
             scroll,
+            createProjectButton,
             localRoot,
             chooseRootButton,
             status,
@@ -86,7 +93,7 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
         }
     }
 
-    func setProjects(_ projects: [FileEntry]) {
+    func setProjects(_ projects: [RemoteProject]) {
         self.projects = projects
         table.reloadData()
         status.stringValue = projects.isEmpty ? "这个工作空间还没有项目" : ""
@@ -144,5 +151,9 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
 
     @objc private func chooseLocalRoot() {
         onChooseLocalRoot?()
+    }
+
+    @objc private func createProject() {
+        onCreateProject?()
     }
 }

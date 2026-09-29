@@ -14,13 +14,13 @@ struct Workspace: Decodable, Identifiable {
     }
 }
 
-struct FileEntry: Decodable {
+struct RemoteProject: Decodable, Identifiable {
+    let id: String
     let name: String
-    let isDir: Bool
+    let path: String
 
     enum CodingKeys: String, CodingKey {
-        case name
-        case isDir = "is_dir"
+        case id, name, path
     }
 }
 

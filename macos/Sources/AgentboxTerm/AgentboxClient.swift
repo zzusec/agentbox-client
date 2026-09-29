@@ -31,12 +31,20 @@ final class AgentboxClient {
         try await request("api/sessions")
     }
 
-    func projects(in workspace: Workspace) async throws -> [FileEntry] {
-        let entries: [FileEntry] = try await request(
-            "api/sessions/\(escaped(workspace.id))/files?path="
+    func projects(in workspace: Workspace) async throws -> [RemoteProject] {
+        let projects: [RemoteProject] = try await request(
+            "api/sessions/\(escaped(workspace.id))/projects"
         )
-        return entries.filter { $0.isDir && !$0.name.hasPrefix(".") }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        return projects.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    func createProject(name: String, in workspace: Workspace) async throws -> RemoteProject {
+        let url = Self.endpoint(server, "api/sessions/\(escaped(workspace.id))/projects")
+        var request = authorizedRequest(url: url, method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["name": name])
+        let data = try await Self.perform(request, token: token)
+        return try JSONDecoder().decode(RemoteProject.self, from: data)
     }
 
     func upload(file: URL, workspace: Workspace, project: String) async throws -> String? {

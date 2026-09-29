@@ -42,6 +42,9 @@ final class MainViewController: NSSplitViewController {
         sidebar.onChooseLocalRoot = { [weak self] in
             self?.chooseLocalRoot()
         }
+        sidebar.onCreateProject = { [weak self] in
+            self?.createProject()
+        }
 
         Task { @MainActor in
             do {
@@ -73,7 +76,7 @@ final class MainViewController: NSSplitViewController {
         }
     }
 
-    private func open(_ project: FileEntry) {
+    private func open(_ project: RemoteProject) {
         guard let workspace else { return }
         let key = "\(workspace.id)/\(project.name)"
         if let existing = terminals[key] {
@@ -113,6 +116,34 @@ final class MainViewController: NSSplitViewController {
         } else {
             syncManager?.stop()
             syncManager = nil
+        }
+    }
+
+    private func createProject() {
+        guard let workspace else { return }
+        let alert = NSAlert()
+        alert.messageText = "新建项目"
+        alert.informativeText = "项目会在服务器 /workspace 下创建，并同步到本地同步目录。"
+        alert.addButton(withTitle: "创建")
+        alert.addButton(withTitle: "取消")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.placeholderString = "项目名称"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        Task { @MainActor in
+            do {
+                _ = try await client.createProject(name: name, in: workspace)
+                sidebar.setProjects(try await client.projects(in: workspace))
+            } catch {
+                let errorAlert = NSAlert()
+                errorAlert.messageText = "创建项目失败"
+                errorAlert.informativeText = error.localizedDescription
+                errorAlert.alertStyle = .warning
+                errorAlert.runModal()
+            }
         }
     }
 
