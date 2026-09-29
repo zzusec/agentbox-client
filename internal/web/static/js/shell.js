@@ -103,6 +103,52 @@ document.addEventListener("keydown", e => {
 });
 window.addEventListener("resize", () => closeUserMenu(userMenu.contains(document.activeElement)));
 bus.addEventListener("unauthorized", () => closeUserMenu());
+const clientPairDialog = $("dlg-client-pair");
+let clientPairTimer;
+function stopClientPairCountdown() {
+    if (clientPairTimer)
+        clearInterval(clientPairTimer);
+    clientPairTimer = undefined;
+}
+function startClientPairCountdown(seconds) {
+    stopClientPairCountdown();
+    const expiry = $("client-pair-expiry");
+    const deadline = Date.now() + Math.max(0, seconds) * 1000;
+    const tick = () => {
+        const left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+        expiry.textContent = left > 0
+            ? `剩余 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} 内有效，仅能使用一次`
+            : "配对码已过期，请关闭后重新生成";
+        if (left <= 0)
+            stopClientPairCountdown();
+    };
+    tick();
+    clientPairTimer = setInterval(tick, 1000);
+}
+function showClientPairCode(code, expiresIn) {
+    closeUserMenu();
+    $("client-pair-code").textContent = code;
+    startClientPairCountdown(expiresIn);
+    clientPairDialog.showModal();
+}
+clientPairDialog.addEventListener("close", stopClientPairCountdown);
+clientPairDialog.addEventListener("click", event => {
+    if (event.target === clientPairDialog)
+        clientPairDialog.close();
+});
+$("client-pair-close").addEventListener("click", () => clientPairDialog.close());
+$("client-pair-copy").addEventListener("click", async () => {
+    const code = $("client-pair-code").textContent || "";
+    if (!code)
+        return;
+    try {
+        await navigator.clipboard.writeText(code);
+        toast("配对码已复制");
+    }
+    catch (_) {
+        toast("复制失败，请在对话框中手动选中配对码", true);
+    }
+});
 $("btn-pair-client").addEventListener("click", async () => {
     const button = $("btn-pair-client");
     button.disabled = true;
@@ -113,12 +159,10 @@ $("btn-pair-client").addEventListener("click", async () => {
         });
         try {
             await navigator.clipboard.writeText(result.code);
-            toast("Mac 客户端配对码已复制，粘贴到 Agentbox Term 即可");
+            toast("Mac 客户端配对码已复制");
         }
-        catch (_) {
-            window.prompt("请复制 Mac 客户端配对码", result.code);
-        }
-        closeUserMenu();
+        catch (_) { }
+        showClientPairCode(result.code, result.expires_in);
     }
     catch (error) {
         toast(error.message || "生成配对码失败", true);

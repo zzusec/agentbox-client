@@ -1213,6 +1213,19 @@
 </div>
 
 <!-- 新建工作空间 -->
+<dialog id="dlg-client-pair" class="dlg-client-pair" aria-labelledby="client-pair-title">
+  <div class="dlg-head">
+    <h2 id="client-pair-title">连接 Mac 终端</h2>
+    <button type="button" id="client-pair-close" class="dlg-x" aria-label="关闭" data-icon="close"></button>
+  </div>
+  <p class="field-hint">在 agentbox-client 的配对窗口中粘贴下面的代码。代码只能使用一次。</p>
+  <div class="client-pair-code-row">
+    <code id="client-pair-code" class="mono"></code>
+    <button type="button" id="client-pair-copy" class="btn btn-sm" data-icon="copy">复制</button>
+  </div>
+  <p id="client-pair-expiry" class="field-hint"></p>
+</dialog>
+
 <dialog id="dlg-new" aria-labelledby="new-title" aria-describedby="new-desc">
   <form id="new-form" method="dialog">
     <div class="dlg-head">

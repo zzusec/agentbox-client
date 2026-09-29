@@ -19,6 +19,27 @@ dialog label { display: flex; flex-direction: column; gap: 6px; font-size: 13px;
 dialog input[type="text"], dialog input[type="number"], dialog input[type="password"],
 dialog select, dialog .select-trigger, dialog textarea { width: 100%; }
 dialog textarea { resize: vertical; }
+.dlg-client-pair { width: min(560px, 92vw); }
+.client-pair-code-row {
+  display: flex; align-items: stretch; gap: 10px; margin: 16px 0 10px;
+}
+.client-pair-code-row code {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text-hi);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.client-pair-code-row .btn { flex: none; min-width: 72px; }
+@media (max-width: 480px) {
+  .client-pair-code-row { flex-direction: column; }
+  .client-pair-code-row .btn { width: 100%; }
+}
 .dlg-git-connections { width: min(720px, 94vw); }
 .dlg-git-connections p { overflow-wrap: anywhere; white-space: pre-line; }
 .dlg-git-connections input { width: 100%; }
