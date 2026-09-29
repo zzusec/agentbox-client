@@ -1,6 +1,6 @@
 /* shell：登录页 + 应用外壳（顶栏 / 侧栏 / 抽屉 / 主区视图切换）。 */
 
-/* ---- 登录：牛皮纸点阵衬底 + 盒仔迎宾 ---- */
+/* ---- 登录：冷色点阵衬底 + 盒仔迎宾 ---- */
 .login {
   height: 100vh;
   height: 100dvh;
@@ -237,7 +237,7 @@
   padding: 10px 8px 12px; margin-bottom: 4px; border-bottom: 1px solid var(--line);
 }
 .side-user-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; line-height: 20px; overflow-wrap: anywhere; }
-.side-user-role { flex: none; padding: 0 6px; border-radius: 4px; background: var(--panel-2); color: var(--muted); font-size: 10px; line-height: 20px; }
+.side-user-role { flex: none; padding: 0 6px; border-radius: 4px; background: var(--violet-soft); color: var(--violet); font-size: 10px; line-height: 20px; }
 .side-logout {
   display: flex; align-items: center; gap: 8px;
   width: 100%; height: 34px; padding: 0 8px;

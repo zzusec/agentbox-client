@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AGENTBOX 控制台</title>
-<meta name="theme-color" content="#12151c">
+<meta name="theme-color" content="#0b1120">
 <!-- 主题：在样式表之前落 data-theme-mode（system|light|dark）与实际生效的
      data-theme（dark|light），避免跟随系统/浅色用户刷新时闪一帧错误底色。
      默认跟随系统，切换与持久化见 js/theme.js。 -->
@@ -17,14 +17,14 @@
     document.documentElement.dataset.themeMode = mode;
     document.documentElement.dataset.theme = theme;
     var meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.content = theme === "light" ? "#f5f2ea" : "#12151c";
+    if (meta) meta.content = theme === "light" ? "#f5f8fc" : "#0b1120";
   } catch (e) {}
   try {
     document.documentElement.dataset.sidebarCollapsed = localStorage.getItem("agentbox_sidebar_collapsed") === "1" ? "true" : "false";
   } catch (e) {}
 </script>
 <!-- favicon：logo 主形——敞开的箱子里一对发光的眼睛（16px 下省略正面唛头） -->
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M5.6 12 1.2 5.8 4.9 2.9 9.9 9.9Z' fill='%23e8a33d'/%3E%3Cpath d='M26.4 12 30.8 5.8 27.1 2.9 22.1 9.9Z' fill='%23e8a33d'/%3E%3Crect x='5' y='11.4' width='22' height='16.2' rx='3' fill='%23e8a33d'/%3E%3Crect x='8' y='11.4' width='16' height='6.6' rx='1.8' fill='%23241803'/%3E%3Crect x='10.6' y='12.7' width='4' height='4' rx='1.3' fill='%23ffc76b'/%3E%3Crect x='17.4' y='12.7' width='4' height='4' rx='1.3' fill='%23ffc76b'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M5.6 12 1.2 5.8 4.9 2.9 9.9 9.9Z' fill='%2314b8a6'/%3E%3Cpath d='M26.4 12 30.8 5.8 27.1 2.9 22.1 9.9Z' fill='%2314b8a6'/%3E%3Crect x='5' y='11.4' width='22' height='16.2' rx='3' fill='%2314b8a6'/%3E%3Crect x='8' y='11.4' width='16' height='6.6' rx='1.8' fill='%23042f2e'/%3E%3Crect x='10.6' y='12.7' width='4' height='4' rx='1.3' fill='%235eead4'/%3E%3Crect x='17.4' y='12.7' width='4' height='4' rx='1.3' fill='%235eead4'/%3E%3C/svg%3E">
 <!-- {{BUILD}} 由服务端替换为资源内容哈希：URL 随内容变化，穿透 CF/浏览器缓存 -->
 <link rel="stylesheet" href="/_v/{{BUILD}}/vendor/xterm.css">
 <link rel="stylesheet" href="/_v/{{BUILD}}/vendor/katex/katex.min.css">
@@ -55,30 +55,30 @@
   <!-- viewBox 顶部留 5 单位余量：天线光晕上沿正好在 y=0，boxi-bob 上浮 3.5 会被裁掉 -->
   <svg viewBox="0 -5 200 173" aria-hidden="true">
     <ellipse cx="100" cy="158" rx="56" ry="7" fill="#000" opacity=".3"/>
-    <path d="M53 96 L17 87 L21.5 73.5 L55 85 Z" fill="#e8a33d" stroke="#a8712a" stroke-width="2" stroke-linejoin="round"/>
-    <path d="M147 96 L183 87 L178.5 73.5 L145 85 Z" fill="#e8a33d" stroke="#a8712a" stroke-width="2" stroke-linejoin="round"/>
-    <path d="M58 86 L142 86 L137 60 L63 60 Z" fill="#b97b2c" stroke="#8f5f22" stroke-width="2" stroke-linejoin="round"/>
-    <rect x="54" y="82" width="92" height="14" rx="3" fill="#231803"/>
+    <path d="M53 96 L17 87 L21.5 73.5 L55 85 Z" fill="#14b8a6" stroke="#0f766e" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M147 96 L183 87 L178.5 73.5 L145 85 Z" fill="#14b8a6" stroke="#0f766e" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M58 86 L142 86 L137 60 L63 60 Z" fill="#0f9f8f" stroke="#115e59" stroke-width="2" stroke-linejoin="round"/>
+    <rect x="54" y="82" width="92" height="14" rx="3" fill="#042f2e"/>
     <g class="boxi-bob">
       <rect x="74" y="70" width="52" height="32" rx="12" fill="#232a37" stroke="#3d4a63" stroke-width="2"/>
       <path d="M100 22 V11" stroke="#3d4a63" stroke-width="3" stroke-linecap="round"/>
-      <circle class="boxi-glow" cx="100" cy="9" r="9" fill="#ffbe55" opacity=".2"/>
-      <circle cx="100" cy="9" r="4.5" fill="#ffbe55"/>
-      <circle cx="66" cy="47" r="5.5" fill="#e8a33d" stroke="#a8712a" stroke-width="1.5"/>
-      <circle cx="134" cy="47" r="5.5" fill="#e8a33d" stroke="#a8712a" stroke-width="1.5"/>
+      <circle class="boxi-glow" cx="100" cy="9" r="9" fill="#5eead4" opacity=".2"/>
+      <circle cx="100" cy="9" r="4.5" fill="#5eead4"/>
+      <circle cx="66" cy="47" r="5.5" fill="#14b8a6" stroke="#0f766e" stroke-width="1.5"/>
+      <circle cx="134" cy="47" r="5.5" fill="#14b8a6" stroke="#0f766e" stroke-width="1.5"/>
       <rect x="68" y="22" width="64" height="50" rx="17" fill="#232a37" stroke="#3d4a63" stroke-width="2"/>
       <rect x="77" y="32" width="46" height="30" rx="10" fill="#0b0e15"/>
-      <circle cx="84.5" cy="54" r="2.6" fill="#ffbe55" opacity=".22"/>
-      <circle cx="115.5" cy="54" r="2.6" fill="#ffbe55" opacity=".22"/>
-      <rect class="boxi-eye" x="86" y="39" width="8" height="12" rx="3.5" fill="#ffbe55"/>
-      <rect class="boxi-eye" x="106" y="39" width="8" height="12" rx="3.5" fill="#ffbe55"/>
-      <path d="M92.5 56 Q100 62 107.5 56" stroke="#ffbe55" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+      <circle cx="84.5" cy="54" r="2.6" fill="#5eead4" opacity=".22"/>
+      <circle cx="115.5" cy="54" r="2.6" fill="#5eead4" opacity=".22"/>
+      <rect class="boxi-eye" x="86" y="39" width="8" height="12" rx="3.5" fill="#5eead4"/>
+      <rect class="boxi-eye" x="106" y="39" width="8" height="12" rx="3.5" fill="#5eead4"/>
+      <path d="M92.5 56 Q100 62 107.5 56" stroke="#5eead4" stroke-width="2.6" fill="none" stroke-linecap="round"/>
     </g>
-    <rect x="52" y="94" width="96" height="58" rx="7" fill="#cf8f36" stroke="#a8712a" stroke-width="2"/>
-    <rect x="55" y="96" width="90" height="5" rx="2.5" fill="#e8a33d"/>
-    <rect x="93" y="94" width="14" height="58" fill="#f2ca7c" stroke="#d9a94f" stroke-width="1"/>
-    <path d="M64 115 L74 123.5 L64 132" stroke="#7c5a1e" stroke-width="5.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-    <rect x="78" y="128.5" width="11" height="5.5" rx="2.5" fill="#7c5a1e"/>
+    <rect x="52" y="94" width="96" height="58" rx="7" fill="#0f9f8f" stroke="#0f766e" stroke-width="2"/>
+    <rect x="55" y="96" width="90" height="5" rx="2.5" fill="#14b8a6"/>
+    <rect x="93" y="94" width="14" height="58" fill="#99f6e4" stroke="#2dd4bf" stroke-width="1"/>
+    <path d="M64 115 L74 123.5 L64 132" stroke="#134e4a" stroke-width="5.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="78" y="128.5" width="11" height="5.5" rx="2.5" fill="#134e4a"/>
     <rect x="112" y="106" width="26" height="16" rx="2" fill="#f4e8cd" stroke="#d9c9a3"/>
     <path d="M116 111 H134 M116 115 H128" stroke="#b09b6e" stroke-width="1.7" stroke-linecap="round"/>
     <g class="boxi-bob">
@@ -90,15 +90,15 @@
 
 <!-- logo 主形（内联字标用）：与 favicon 同源，多一枚正面唛头 >_ -->
 <template id="tpl-mark">
-  <svg class="mark" viewBox="0 0 32 32" fill="#e8a33d" aria-hidden="true">
+  <svg class="mark" viewBox="0 0 32 32" fill="#14b8a6" aria-hidden="true">
     <path d="M5.6 12 1.2 5.8 4.9 2.9 9.9 9.9Z"/>
     <path d="M26.4 12 30.8 5.8 27.1 2.9 22.1 9.9Z"/>
     <rect x="5" y="11.4" width="22" height="16.2" rx="3"/>
-    <rect x="8" y="11.4" width="16" height="6.6" rx="1.8" fill="#241803"/>
-    <rect x="10.6" y="12.7" width="4" height="4" rx="1.3" fill="#ffc76b"/>
-    <rect x="17.4" y="12.7" width="4" height="4" rx="1.3" fill="#ffc76b"/>
-    <path d="M10.6 20.3 13.7 22.8 10.6 25.3" stroke="#8a5f1f" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-    <rect x="16.4" y="23.9" width="4.6" height="2" rx="1" fill="#8a5f1f"/>
+    <rect x="8" y="11.4" width="16" height="6.6" rx="1.8" fill="#042f2e"/>
+    <rect x="10.6" y="12.7" width="4" height="4" rx="1.3" fill="#5eead4"/>
+    <rect x="17.4" y="12.7" width="4" height="4" rx="1.3" fill="#5eead4"/>
+    <path d="M10.6 20.3 13.7 22.8 10.6 25.3" stroke="#0f766e" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="16.4" y="23.9" width="4.6" height="2" rx="1" fill="#0f766e"/>
   </svg>
 </template>
 
