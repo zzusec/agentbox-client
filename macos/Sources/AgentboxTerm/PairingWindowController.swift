@@ -5,6 +5,7 @@ final class PairingWindowController: NSWindowController {
 
     private let codeView = NSTextView()
     private let status = NSTextField(labelWithString: "在 agentbox 网页生成客户端配对码，然后粘贴到这里。")
+    private let pasteButton = NSButton(title: "从剪贴板粘贴", target: nil, action: nil)
     private let connectButton = NSButton(title: "连接", target: nil, action: nil)
 
     init() {
@@ -27,12 +28,21 @@ final class PairingWindowController: NSWindowController {
 
         codeView.isRichText = false
         codeView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        codeView.isEditable = true
+        codeView.isSelectable = true
+        codeView.isAutomaticQuoteSubstitutionEnabled = false
+        codeView.isAutomaticDashSubstitutionEnabled = false
         codeView.string = ""
         let scroll = NSScrollView()
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.documentView = codeView
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
+
+        pasteButton.target = self
+        pasteButton.action = #selector(pasteFromClipboard)
+        pasteButton.bezelStyle = .rounded
+        pasteButton.translatesAutoresizingMaskIntoConstraints = false
 
         connectButton.target = self
         connectButton.action = #selector(connect)
@@ -41,7 +51,12 @@ final class PairingWindowController: NSWindowController {
 
         root.addSubview(status)
         root.addSubview(scroll)
-        root.addSubview(connectButton)
+        let actions = NSStackView(views: [pasteButton, connectButton])
+        actions.orientation = .horizontal
+        actions.spacing = 10
+        actions.translatesAutoresizingMaskIntoConstraints = false
+        actions.setHuggingPriority(.defaultHigh, for: .horizontal)
+        root.addSubview(actions)
         NSLayoutConstraint.activate([
             status.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 18),
             status.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -18),
@@ -50,14 +65,28 @@ final class PairingWindowController: NSWindowController {
             scroll.trailingAnchor.constraint(equalTo: status.trailingAnchor),
             scroll.topAnchor.constraint(equalTo: status.bottomAnchor, constant: 12),
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 180),
-            connectButton.trailingAnchor.constraint(equalTo: status.trailingAnchor),
-            connectButton.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 12),
-            connectButton.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -18),
+            actions.trailingAnchor.constraint(equalTo: status.trailingAnchor),
+            actions.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 12),
+            actions.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -18),
         ])
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    func focusCode() {
+        window?.makeFirstResponder(codeView)
+    }
+
+    @objc private func pasteFromClipboard() {
+        guard let value = NSPasteboard.general.string(forType: .string), !value.isEmpty else {
+            status.stringValue = "剪贴板里没有可粘贴的文本。"
+            return
+        }
+        codeView.string = value
+        status.stringValue = "已从剪贴板粘贴，点击“连接”继续。"
+        focusCode()
     }
 
     @objc private func connect() {
