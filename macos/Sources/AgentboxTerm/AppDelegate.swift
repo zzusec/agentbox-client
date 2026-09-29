@@ -1,11 +1,17 @@
 import AppKit
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindow: NSWindowController?
     private var pairingWindow: PairingWindowController?
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        buildMainMenu()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        UpdateManager.shared.start()
         if let saved = savedConnection() {
             showMain(saved)
         } else {
@@ -16,6 +22,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    private func buildMainMenu() {
+        let mainMenu = NSMenu()
+        let appItem = NSMenuItem()
+        mainMenu.addItem(appItem)
+        let appMenu = NSMenu()
+        appItem.submenu = appMenu
+
+        appMenu.addItem(
+            withTitle: "关于 Agentbox Term",
+            action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+            keyEquivalent: ""
+        )
+        appMenu.addItem(.separator())
+
+        let checkItem = NSMenuItem(
+            title: "检查更新…",
+            action: #selector(UpdateManager.checkForUpdates(_:)),
+            keyEquivalent: ""
+        )
+        checkItem.target = UpdateManager.shared
+        appMenu.addItem(checkItem)
+
+        let automaticItem = NSMenuItem(
+            title: "自动检查并准备更新",
+            action: #selector(UpdateManager.toggleAutomatic(_:)),
+            keyEquivalent: ""
+        )
+        automaticItem.target = UpdateManager.shared
+        UpdateManager.shared.applyMenuState(automaticItem)
+        appMenu.addItem(automaticItem)
+        appMenu.addItem(.separator())
+
+        appMenu.addItem(
+            withTitle: "退出 Agentbox Term",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        NSApp.mainMenu = mainMenu
     }
 
     private func savedConnection() -> SavedConnection? {

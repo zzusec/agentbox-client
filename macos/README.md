@@ -46,6 +46,31 @@ The sync process currently polls every five seconds. The server owns project
 IDs and sync leases; each project has one writable device at a time, while
 other devices continue to receive server changes.
 
+## Updates
+
+Agentbox Term checks the latest GitHub release on launch and every four hours.
+When `自动检查并准备更新` is enabled, it downloads `AgentboxTerm-macos-arm64.zip`,
+verifies the release SHA-256 digest, verifies the `.app` code signature and only
+then offers to restart into the new version. `检查更新…` in the application menu
+runs the same flow immediately.
+
+Create a release artifact with:
+
+```bash
+macos/scripts/release-app.sh 0.2.1
+```
+
+This produces:
+
+```text
+macos/dist/AgentboxTerm-macos-arm64-v0.2.1.zip
+macos/dist/AgentboxTerm-macos-arm64-v0.2.1.zip.sha256
+```
+
+The GitHub release tag must be `v0.2.1` and the ZIP asset name must remain
+stable. Do not publish an update without the checksum file; the client refuses
+archives whose SHA-256 cannot be verified.
+
 Current limitations:
 
 - Full iTerm2 feature parity is not implemented yet; tabs, native rendering,
