@@ -101,12 +101,28 @@ func randomPairCode() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+// handleClientPair issues a pairing code for any authenticated agentbox
+// client. Unlike the legacy tunnel endpoint this does not require the reverse
+// tunnel feature to be enabled.
+func (s *Server) handleClientPair(w http.ResponseWriter, r *http.Request) {
+	s.issuePairCode(w, r)
+}
+
+// handleClientPairRedeem exchanges a client pairing code for a session token.
+func (s *Server) handleClientPairRedeem(w http.ResponseWriter, r *http.Request) {
+	s.redeemPairCode(w, r)
+}
+
 // handleTunnelPair issues a pairing code for the calling user.
 func (s *Server) handleTunnelPair(w http.ResponseWriter, r *http.Request) {
 	if !s.cfg.GetTunnel().Enabled {
 		writeErr(w, http.StatusForbidden, "内网隧道功能未启用")
 		return
 	}
+	s.issuePairCode(w, r)
+}
+
+func (s *Server) issuePairCode(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Origin string `json:"origin"` // the browser's own location.origin
 	}
@@ -160,6 +176,10 @@ func (s *Server) handleTunnelPairRedeem(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusForbidden, "内网隧道功能未启用")
 		return
 	}
+	s.redeemPairCode(w, r)
+}
+
+func (s *Server) redeemPairCode(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Code string `json:"code"`
 	}

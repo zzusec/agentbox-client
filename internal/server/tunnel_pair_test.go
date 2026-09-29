@@ -1,10 +1,15 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"agentbox/internal/store"
+	"agentbox/internal/tunnel"
 )
 
 func TestPairCodeIsSingleUse(t *testing.T) {
@@ -122,4 +127,62 @@ func TestPairOrigin(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClientPairDoesNotRequireTunnel(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.pairs = newPairStore()
+	if err := s.store.CreateUser(store.User{Name: "alice", Role: store.RoleUser}); err != nil {
+		t.Fatal(err)
+	}
+
+	issue := accessRequest("alice", http.MethodPost, "/api/clients/pair", `{"origin":"https://box.example.com"}`)
+	w := httptest.NewRecorder()
+	s.handleClientPair(w, issue)
+	if w.Code != http.StatusOK {
+		t.Fatalf("issue status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var issued struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &issued); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := tunnel.DecodePairCode(issued.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.Server != "https://box.example.com" {
+		t.Fatalf("server = %q", payload.Server)
+	}
+
+	redeem := httptest.NewRequest(http.MethodPost, "/api/clients/pair/redeem",
+		strings.NewReader(`{"code":`+string(mustJSON(t, payload.Code))+`}`))
+	w = httptest.NewRecorder()
+	s.handleClientPairRedeem(w, redeem)
+	if w.Code != http.StatusOK {
+		t.Fatalf("redeem status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var result struct {
+		User  string `json:"user"`
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.User != "alice" || result.Token == "" {
+		t.Fatalf("redeem result = %+v", result)
+	}
+	if user, ok := s.store.TokenUser(result.Token); !ok || user.Name != "alice" {
+		t.Fatalf("issued token is not usable: %q %v", user.Name, ok)
+	}
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }

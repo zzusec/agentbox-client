@@ -27,5 +27,10 @@ config.json.bak*
 
 __pycache__/
 
+# macOS 客户端构建产物
+/macos/.build/
+/macos/dist/
+/third_party/swiftterm/.build/
+
 # macOS 文件夹元数据
 .DS_Store

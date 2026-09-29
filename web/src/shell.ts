@@ -5,9 +5,10 @@
 
 import { S, bus, emit } from "./state.js";
 import type { View } from "./state.js";
-import { $ } from "./util.js";
+import { $, toast } from "./util.js";
 import { agentIcon, agentAvatar, agentName } from "./brand.js";
 import { hideTip, setTip } from "./tip.js";
+import { api } from "./api.js";
 
 /* ---- 侧栏：桌面收起偏好与移动抽屉各自独立 ---- */
 
@@ -102,6 +103,28 @@ document.addEventListener("keydown", e => {
 });
 window.addEventListener("resize", () => closeUserMenu(userMenu.contains(document.activeElement)));
 bus.addEventListener("unauthorized", () => closeUserMenu());
+
+$("btn-pair-client").addEventListener("click", async () => {
+  const button = $<HTMLButtonElement>("btn-pair-client");
+  button.disabled = true;
+  try {
+    const result = await api<{ code: string }>("/clients/pair", {
+      method: "POST",
+      body: JSON.stringify({ origin: location.origin }),
+    });
+    try {
+      await navigator.clipboard.writeText(result.code);
+      toast("Mac 客户端配对码已复制，粘贴到 Agentbox Term 即可");
+    } catch (_) {
+      window.prompt("请复制 Mac 客户端配对码", result.code);
+    }
+    closeUserMenu();
+  } catch (error) {
+    toast((error as Error).message || "生成配对码失败", true);
+  } finally {
+    button.disabled = false;
+  }
+});
 
 function syncSidebar() {
   const open = narrowMQ.matches && sidebar.classList.contains("open");

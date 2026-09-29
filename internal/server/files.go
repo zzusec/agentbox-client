@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -36,8 +37,8 @@ func (s *Server) filesRootForScope(scope string, sess store.Session) (string, er
 }
 
 // handleUpload accepts a multipart "file" field. Archives (.zip/.tar.gz/.tgz/
-// .tar) are extracted into the target directory; anything else is stored as a
-// single file at its root. "clear=1" empties the target directory first.
+// .tar) are extracted into ?path=; anything else is stored as a single file
+// there. "clear=1" empties the target directory first.
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request, sess store.Session) {
 	maxBytes := s.cfg.GetMaxUploadMB() << 20
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes+(1<<20))
@@ -63,6 +64,16 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request, sess store
 		return
 	}
 	defer root.Close()
+	target := root
+	destination := strings.TrimSpace(r.URL.Query().Get("path"))
+	if destination != "" {
+		target, err = root.Sub(destination)
+		if err != nil {
+			writeFileOpErr(w, err)
+			return
+		}
+		defer target.Close()
+	}
 	clear := r.FormValue("clear") == "1"
 	// Stage every upload outside container mounts. A malformed archive cannot
 	// leave a partially overwritten live tree even when clear is false.
@@ -84,12 +95,14 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request, sess store
 	}
 	defer staged.Close()
 	count, mode := 1, "file"
+	uploadedName := ""
 	if !archivex.IsArchiveName(hdr.Filename) {
 		name := filepath.Base(filepath.Clean(hdr.Filename))
 		if name == "." || name == ".." || name == "/" {
 			writeFileOpErr(w, errFileOpInvalid)
 			return
 		}
+		uploadedName = name
 		_, err = staged.WriteAtomic(name, file, safefs.WriteOptions{Mode: 0o644, MaxBytes: maxBytes, Limit: true})
 	} else {
 		mode = "archive"
@@ -117,16 +130,26 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request, sess store
 		return
 	}
 	if clear {
-		if err := root.Clear(); err != nil {
+		if err := target.Clear(); err != nil {
 			writeFileOpErr(w, err)
 			return
 		}
 	}
-	if err := mergeUpload(staged, root); err != nil {
+	if err := mergeUpload(staged, target); err != nil {
 		writeFileOpErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"files": count, "mode": mode})
+	out := map[string]any{"files": count, "mode": mode}
+	if mode == "file" {
+		rel := path.Join(filepath.ToSlash(destination), uploadedName)
+		out["path"] = rel
+		base := dockerx.WorkspaceMount
+		if r.URL.Query().Get("scope") == "shared" {
+			base = "/shared"
+		}
+		out["container_path"] = path.Join(base, rel)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func mergeUpload(src, dst *safefs.Root) error {

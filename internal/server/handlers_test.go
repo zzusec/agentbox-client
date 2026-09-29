@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"encoding/json"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -121,6 +122,40 @@ func TestHandleUploadClearReplacesAtomically(t *testing.T) {
 		if strings.HasPrefix(e.Name(), ".stage-") {
 			t.Fatalf("staging artifact left behind: %s", e.Name())
 		}
+	}
+}
+
+func TestHandleUploadToProjectReturnsContainerPath(t *testing.T) {
+	s, sess := newTestServer(t)
+	if err := os.Mkdir(filepath.Join(s.workspaceDir(sess), "alpha"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, err := mw.CreateFormFile("file", "note.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = fw.Write([]byte("hello"))
+	_ = mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/s1/upload?path=alpha", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	w := httptest.NewRecorder()
+	s.handleUpload(w, req, sess)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out["path"] != "alpha/note.txt" || out["container_path"] != "/workspace/alpha/note.txt" {
+		t.Fatalf("response = %#v", out)
+	}
+	if raw, err := os.ReadFile(filepath.Join(s.workspaceDir(sess), "alpha", "note.txt")); err != nil || string(raw) != "hello" {
+		t.Fatalf("uploaded file = %q, %v", raw, err)
 	}
 }
 

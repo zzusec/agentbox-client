@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"agentbox/internal/config"
 	"agentbox/internal/store"
 )
 
@@ -151,5 +152,50 @@ func TestTermCommandKeepsFallbackAndAttach(t *testing.T) {
 	// The sync block must not be able to write to the PTY or abort the attach.
 	if !strings.Contains(cmd, "} >/dev/null 2>&1\n") {
 		t.Errorf("sync output not silenced:\n%s", cmd)
+	}
+}
+
+func TestParseTerminalRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		target  string
+		mode    string
+		project string
+		ok      bool
+	}{
+		{name: "default shell", target: "/term", mode: "shell", ok: true},
+		{name: "agent project", target: "/term?mode=agent&project=alpha", mode: "agent", project: "alpha", ok: true},
+		{name: "agent requires project", target: "/term?mode=agent", ok: false},
+		{name: "reject separators", target: "/term?mode=agent&project=a%2Fb", ok: false},
+		{name: "reject unknown mode", target: "/term?mode=other", ok: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, tt.target, nil)
+			got, err := parseTerminalRequest(r)
+			if tt.ok != (err == nil) {
+				t.Fatalf("ok = %v, err = %v", tt.ok, err)
+			}
+			if tt.ok && (got.mode != tt.mode || got.project != tt.project) {
+				t.Fatalf("request = %+v, want mode=%q project=%q", got, tt.mode, tt.project)
+			}
+		})
+	}
+}
+
+func TestAgentTermCommandUsesProjectSession(t *testing.T) {
+	cmd := agentTermCommand([]string{envIntranetProxy + "=socks5h://x"}, "alpha", config.AgentClaude)
+	for _, want := range []string{
+		"/workspace/alpha",
+		"exec claude",
+		"new-session -A -D -s " + shellQuote(agentTmuxSession("alpha")),
+		"set-environment -g " + envIntranetProxy + " 'socks5h://x'; ",
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("missing %q in:\n%s", want, cmd)
+		}
+	}
+	if agentTmuxSession("alpha") == agentTmuxSession("beta") {
+		t.Fatal("different projects must not share a tmux session")
 	}
 }

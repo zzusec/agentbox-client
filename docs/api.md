@@ -20,6 +20,8 @@
 | `GET /api/me` | 已登录 | 当前用户、角色、时区、额度及界面所需信息 |
 | `POST /api/me/password` | 已登录 | `{old_password, new_password}`；保留当前令牌，撤销其他登录 |
 | `POST /api/tunnel/pair/redeem` | 凭配对码 | 配对码本身是一次性凭证，无需另带登录令牌 |
+| `POST /api/clients/pair` | 已登录 | 生成一次性客户端配对码，不要求启用内网隧道 |
+| `POST /api/clients/pair/redeem` | 凭配对码 | 客户端用配对码换取会话令牌，无需另带登录令牌 |
 
 ## 工作空间
 
@@ -41,6 +43,10 @@ DELETE /api/sessions/{id}?purge=1   删除（purge 同时清除文件、配置�
 
 ```text
 POST   /api/sessions/{id}/upload    上传 multipart(file)，普通文件或 zip/tar.gz/tgz/tar；clear=1 先清空
+GET    /api/sessions/{id}/projects 列出并注册工作空间的一级项目，返回稳定 project_id
+POST   /api/sessions/{id}/projects 新建项目 {name}
+PATCH  /api/sessions/{id}/projects/{project} 重命名项目 {name}
+DELETE /api/sessions/{id}/projects/{project} 将项目移入服务器回收目录
 GET    /api/sessions/{id}/archive   打包下载 (zip)
 GET    /api/sessions/{id}/files     文件列表（含权限/大小/时间）?path=
 DELETE /api/sessions/{id}/files     递归删除文件或目录 ?path=
@@ -50,6 +56,12 @@ POST   /api/sessions/{id}/files/mkdir 新建文件夹 {scope,dir,name}
 POST   /api/sessions/{id}/files/rename 重命名文件或目录 {scope,path,name}
 GET    /api/sessions/{id}/file      读单个文件 ?path=；dl=1 强制下载
 PUT    /api/sessions/{id}/file      保存文件内容（body 即内容，上限 16MB）
+GET    /api/sync/projects/{project}/manifest 项目 manifest（目录、文件哈希、符号链接）
+POST   /api/sync/projects/{project}/lease    获取或续约 30–300 秒写租约
+DELETE /api/sync/projects/{project}/lease    释放写租约
+GET    /api/sync/projects/{project}/file     流式读取同步文件 ?path=
+PUT    /api/sync/projects/{project}/file     流式写入同步文件 ?path=，需要写租约
+DELETE /api/sync/projects/{project}/file     删除同步文件 ?path=，需要写租约
 GET    /api/sessions/{id}/preview   ?path=&scope= 签发短时只读预览链接
 POST   /api/sessions/{id}/images    图片 / 聊天附件上传（multipart file，上限 20MB），
                                     图片存入 /shared/.images/，其他文件存入 /shared/.file/；
@@ -103,7 +115,7 @@ POST   /api/sessions/{id}/chat/threads/{tid}/activate  切换到指定线程并�
 PATCH  /api/sessions/{id}/chat/threads/{tid}        重命名线程 {title}
 DELETE /api/sessions/{id}/chat/threads/{tid}        删除线程（删当前线程自动切到最近一条）
 WS     /api/sessions/{id}/chat      对话通道（JSON 事件）
-WS     /api/sessions/{id}/term      终端通道（二进制 PTY；?mode=shell|agent）
+WS     /api/sessions/{id}/term      终端通道（二进制 PTY；?mode=shell|agent，agent 模式需带 project）
 ```
 
 ## 使用记录

@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"agentbox/internal/config"
 	"agentbox/internal/store"
 )
 
@@ -78,6 +81,59 @@ func termCommand(env []string) string {
 	return cmd + "exec tmux -u new-session -A -D -s main"
 }
 
+// agentTermCommand opens the interactive coding agent for one workspace
+// project. Each project gets a stable tmux session so several projects can run
+// independently, and reconnecting attaches to the same agent process.
+func agentTermCommand(env []string, project, agentType string) string {
+	projectPath := "/workspace/" + project
+	program := "claude"
+	if agentType == config.AgentCodex {
+		program = "codex"
+	}
+	run := "cd " + shellQuote(projectPath) + " && exec " + program
+	cmd := "command -v tmux >/dev/null || { " + run + "; }\n"
+	if sync := tmuxEnvSync(env); sync != "" {
+		cmd += "{ " + sync + "} >/dev/null 2>&1\n"
+	}
+	return cmd + "exec tmux -u new-session -A -D -s " +
+		shellQuote(agentTmuxSession(project)) + " " + shellQuote(run)
+}
+
+// agentTmuxSession avoids tmux's separator characters and keeps names stable
+// without exposing an arbitrary project name to tmux command parsing.
+func agentTmuxSession(project string) string {
+	sum := sha256.Sum256([]byte(project))
+	return "agent-" + hex.EncodeToString(sum[:])[:12]
+}
+
+type terminalRequest struct {
+	mode    string
+	project string
+}
+
+func parseTerminalRequest(r *http.Request) (terminalRequest, error) {
+	req := terminalRequest{
+		mode:    strings.TrimSpace(r.URL.Query().Get("mode")),
+		project: strings.TrimSpace(r.URL.Query().Get("project")),
+	}
+	if req.mode == "" {
+		req.mode = "shell"
+	}
+	switch req.mode {
+	case "shell":
+		return req, nil
+	case "agent":
+		project, ok := validFileName(req.project)
+		if !ok {
+			return terminalRequest{}, fmt.Errorf("项目名称无效")
+		}
+		req.project = project
+		return req, nil
+	default:
+		return terminalRequest{}, fmt.Errorf("终端模式无效")
+	}
+}
+
 // tmuxEnvSync renders the `tmux set-environment` calls mirroring env into the
 // tmux global environment. Variables that come and go — the tunnel's, and the
 // account's outbound proxy — are unset when absent rather than left alone, so a
@@ -137,6 +193,26 @@ func shellQuote(s string) string {
 // 这一层只挡输入。tmux 里已经跑着的程序断开连接也不会停（detach 不杀进程），
 // 真要按量算准还得从中转站侧计量，见 AGENTS.md 的已知缺口。
 func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request, sess store.Session) {
+	termReq, err := parseTerminalRequest(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if termReq.mode == "agent" {
+		root, err := s.openDataDir(s.workspaceDir(sess))
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "工作空间不可用")
+			return
+		}
+		project, err := root.Sub(termReq.project)
+		root.Close()
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "项目不存在或不是普通目录")
+			return
+		}
+		project.Close()
+	}
+
 	if why := s.quotaBlock(sess.User); why != "" {
 		// 先升级再关：理由要送到浏览器手里，升级前返回 HTTP 错误它看不见。
 		if conn, err := s.upgrader.Upgrade(w, r, nil); err == nil {
@@ -155,7 +231,7 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request, sess store
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-	sess, err := s.startSession(ctx, sess)
+	sess, err = s.startSession(ctx, sess)
 	cancel()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "start session: "+err.Error())
@@ -179,7 +255,11 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request, sess store
 		}
 		return
 	}
-	pty, err := s.dock.ExecPTY(r.Context(), sess.ContainerID, []string{"/bin/bash", "-c", termCommand(env)}, env)
+	command := termCommand(env)
+	if termReq.mode == "agent" {
+		command = agentTermCommand(env, termReq.project, sess.Agent)
+	}
+	pty, err := s.dock.ExecPTY(r.Context(), sess.ContainerID, []string{"/bin/bash", "-c", command}, env)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "exec: "+err.Error())
 		return
