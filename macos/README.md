@@ -55,7 +55,7 @@ then offers to restart into the new version. `检查更新…` in the applicatio
 runs the same flow immediately.
 
 The release repository is read from `AgentboxUpdateRepository` in `Info.plist`
-and currently points to `zzusec/agentbox`.
+and currently points to `zzusec/agentbox-client`.
 
 Create a release artifact with:
 
