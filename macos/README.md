@@ -54,6 +54,9 @@ verifies the release SHA-256 digest, verifies the `.app` code signature and only
 then offers to restart into the new version. `检查更新…` in the application menu
 runs the same flow immediately.
 
+The release repository is read from `AgentboxUpdateRepository` in `Info.plist`
+and currently points to `zzusec/agentbox`.
+
 Create a release artifact with:
 
 ```bash

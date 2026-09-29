@@ -6,7 +6,11 @@ import Foundation
 final class UpdateManager {
     static let shared = UpdateManager()
 
-    private let releaseAPI = URL(string: "https://api.github.com/repos/devilcoolyue/agentbox/releases/latest")!
+    private let releaseAPI: URL = {
+        let repository = Bundle.main.object(forInfoDictionaryKey: "AgentboxUpdateRepository") as? String
+            ?? "zzusec/agentbox"
+        return URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
+    }()
     private var timer: Timer?
     private var checking = false
     private var installing = false
