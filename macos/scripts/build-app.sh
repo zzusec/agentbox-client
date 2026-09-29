@@ -14,6 +14,7 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$root/.build/release/AgentboxTerm" "$app/Contents/MacOS/AgentboxTerm"
 cp "$root/.build/release/abox-sync" "$app/Contents/Resources/abox-sync"
+cp "$root/Assets/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
 cp "$root/Info.plist" "$app/Contents/Info.plist"
 if [ -n "$version" ]; then
   plutil -replace CFBundleShortVersionString -string "$version" "$app/Contents/Info.plist"

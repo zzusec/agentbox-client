@@ -1,13 +1,17 @@
 import AppKit
 
-final class MainViewController: NSSplitViewController {
+final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitViewDelegate {
     private let client: AgentboxClient
     private let sidebar = SidebarViewController()
-    private let tabs = NSTabViewController()
+    private let terminalGrid = TerminalGridViewController()
+    private let splitView = NSSplitView()
     private var workspaces: [Workspace] = []
     private var workspace: Workspace?
     private var terminals: [String: TerminalViewController] = [:]
     private var syncManager: SyncManager?
+    private var sidebarCollapsed = false
+    private var sidebarWidth: CGFloat = 270
+    private let toolbarSidebar = NSToolbarItem.Identifier("agentbox-client.sidebar")
 
     init(client: AgentboxClient) {
         self.client = client
@@ -18,21 +22,31 @@ final class MainViewController: NSSplitViewController {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func loadView() {
+        let root = NSView()
+        root.wantsLayer = true
+        root.layer?.backgroundColor = NativeTheme.content.cgColor
+        root.autoresizesSubviews = true
+
+        addChild(sidebar)
+        addChild(terminalGrid)
+        let sidebarView = sidebar.view
+        let terminalView = terminalGrid.view
+
+        splitView.isVertical = true
+        splitView.dividerStyle = .thin
+        splitView.delegate = self
+        splitView.addArrangedSubview(sidebarView)
+        splitView.addArrangedSubview(terminalView)
+        splitView.setHoldingPriority(.defaultHigh, forSubviewAt: 0)
+        splitView.frame = root.bounds
+        splitView.autoresizingMask = [.width, .height]
+        root.addSubview(splitView)
+        view = root
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
-        splitView.isVertical = true
-
-        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
-        sidebarItem.minimumThickness = 220
-        sidebarItem.maximumThickness = 320
-        sidebarItem.canCollapse = true
-
-        tabs.tabStyle = .toolbar
-        let terminalItem = NSSplitViewItem(viewController: tabs)
-        terminalItem.minimumThickness = 520
-        addSplitViewItem(sidebarItem)
-        addSplitViewItem(terminalItem)
-
         sidebar.onSelectWorkspace = { [weak self] workspace in
             self?.select(workspace)
         }
@@ -54,6 +68,16 @@ final class MainViewController: NSSplitViewController {
                 sidebar.setStatus("加载空间失败：\(error.localizedDescription)")
             }
         }
+    }
+
+    func installToolbar(in window: NSWindow) {
+        guard window.toolbar == nil else { return }
+        let toolbar = NSToolbar(identifier: "agentbox-client.main")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconOnly
+        toolbar.allowsUserCustomization = false
+        window.toolbar = toolbar
+        window.toolbarStyle = .unifiedCompact
     }
 
     private func select(_ workspace: Workspace) {
@@ -80,21 +104,10 @@ final class MainViewController: NSSplitViewController {
         guard let workspace else { return }
         let key = "\(workspace.id)/\(project.name)"
         if let existing = terminals[key] {
-            tabs.selectedTabViewItemIndex = tabs.tabViewItems.firstIndex {
-                $0.viewController === existing
-            } ?? 0
+            view.window?.makeFirstResponder(existing.view)
             return
         }
-        let terminal = TerminalViewController(
-            client: client,
-            workspace: workspace,
-            project: project
-        )
-        let item = NSTabViewItem(viewController: terminal)
-        item.label = project.name
-        item.identifier = key
-        tabs.addTabViewItem(item)
-        tabs.selectedTabViewItemIndex = tabs.tabViewItems.count - 1
+        let terminal = terminalGrid.add(client: client, workspace: workspace, project: project)
         terminals[key] = terminal
     }
 
@@ -186,5 +199,67 @@ final class MainViewController: NSSplitViewController {
         default:
             return nil
         }
+    }
+
+    @objc private func toggleSidebar(_ sender: Any?) {
+        guard !sidebarCollapsed else {
+            sidebarCollapsed = false
+            sidebar.view.isHidden = false
+            splitView.adjustSubviews()
+            splitView.setPosition(max(250, sidebarWidth), ofDividerAt: 0)
+            return
+        }
+
+        sidebarWidth = max(250, sidebar.view.frame.width)
+        sidebarCollapsed = true
+        sidebar.view.isHidden = true
+        splitView.adjustSubviews()
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [toolbarSidebar, .flexibleSpace]
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [toolbarSidebar, .flexibleSpace]
+    }
+
+    func toolbar(
+        _ toolbar: NSToolbar,
+        itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar flag: Bool
+    ) -> NSToolbarItem? {
+        guard itemIdentifier == toolbarSidebar else { return nil }
+        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+        item.label = "项目栏"
+        item.paletteLabel = "显示或隐藏项目栏"
+        item.toolTip = "显示或隐藏项目栏"
+        item.image = NativeTheme.symbol("sidebar.left", size: 15, weight: .medium)
+        item.target = self
+        item.action = #selector(toggleSidebar(_:))
+        return item
+    }
+
+    func splitView(
+        _ splitView: NSSplitView,
+        constrainMinCoordinate proposedMinimumPosition: CGFloat,
+        ofSubviewAt dividerIndex: Int
+    ) -> CGFloat {
+        max(proposedMinimumPosition, 250)
+    }
+
+    func splitView(
+        _ splitView: NSSplitView,
+        constrainMaxCoordinate proposedMaximumPosition: CGFloat,
+        ofSubviewAt dividerIndex: Int
+    ) -> CGFloat {
+        min(proposedMaximumPosition, 340)
+    }
+
+    func splitView(
+        _ splitView: NSSplitView,
+        canCollapseSubview subview: NSView
+    ) -> Bool {
+        subview === sidebar.view
     }
 }

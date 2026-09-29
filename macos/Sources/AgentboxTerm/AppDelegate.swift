@@ -3,14 +3,20 @@ import AppKit
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindow: NSWindowController?
+    private var mainContent: MainViewController?
     private var pairingWindow: PairingWindowController?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        guard claimPrimaryInstance() else {
+            NSApp.terminate(nil)
+            return
+        }
         buildMainMenu()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        loadApplicationIcon()
         UpdateManager.shared.start()
         if let saved = savedConnection() {
             showMain(saved)
@@ -104,19 +110,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let server = URL(string: connection.server) else { return }
         let client = AgentboxClient(server: server, user: connection.user, token: connection.token)
         let content = MainViewController(client: client)
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
+        mainContent = content
+        let window = NSWindow(contentViewController: content)
         window.title = "agentbox-client"
-        window.contentViewController = content
-        window.minSize = NSSize(width: 900, height: 600)
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+        window.isRestorable = false
+        window.setFrameAutosaveName("")
+        window.backgroundColor = NativeTheme.content
+        window.contentMinSize = NSSize(width: 720, height: 480)
+        window.resizeIncrements = NSSize(width: 1, height: 1)
+        window.contentResizeIncrements = NSSize(width: 1, height: 1)
+        window.collectionBehavior.insert(.fullScreenPrimary)
+        content.installToolbar(in: window)
         let controller = NSWindowController(window: window)
         mainWindow = controller
-        controller.showWindow(nil)
+        let visibleFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+        window.setContentSize(
+            NSSize(
+                width: min(1280, visibleFrame.width - 80),
+                height: min(820, visibleFrame.height - 80)
+            )
+        )
         window.center()
+        controller.showWindow(nil)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    private func loadApplicationIcon() {
+        if let image = NSImage(named: "AppIcon") {
+            NSApp.applicationIconImage = image
+            return
+        }
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+           let image = NSImage(contentsOf: url) {
+            NSApp.applicationIconImage = image
+        }
+    }
+
+    private func claimPrimaryInstance() -> Bool {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return true }
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        if let existing = NSRunningApplication
+            .runningApplications(withBundleIdentifier: bundleID)
+            .first(where: { $0.processIdentifier != currentPID }) {
+            existing.activate(options: [.activateAllWindows])
+            return false
+        }
+        return true
     }
 }
