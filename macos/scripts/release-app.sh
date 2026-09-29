@@ -11,9 +11,9 @@ version=${version#v}
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 AGENTBOX_VERSION="$version" "$root/scripts/build-app.sh"
 
-archive="$root/dist/AgentboxTerm-macos-arm64-v${version}.zip"
+archive="$root/dist/agentbox-client-macos-arm64-v${version}.zip"
 rm -f "$archive" "$archive.sha256"
-ditto -c -k --sequesterRsrc --keepParent "$root/dist/Agentbox Term.app" "$archive"
+ditto -c -k --sequesterRsrc --keepParent "$root/dist/agentbox-client.app" "$archive"
 (
   cd "$root/dist"
   shasum -a 256 "$(basename "$archive")" > "$(basename "$archive").sha256"

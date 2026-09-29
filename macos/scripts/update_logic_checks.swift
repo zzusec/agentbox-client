@@ -15,12 +15,12 @@ struct UpdateLogicChecks {
                 digest: nil
             ),
             ReleaseAsset(
-                name: "AgentboxTerm-macos-arm64.zip",
+                name: "agentbox-client-macos-arm64.zip",
                 browserDownloadURL: "https://example.invalid/mac",
                 digest: "sha256:abc"
             ),
         ]
-        precondition(UpdateLogic.selectMacAsset(assets)?.name == "AgentboxTerm-macos-arm64.zip")
+        precondition(UpdateLogic.selectMacAsset(assets)?.name == "agentbox-client-macos-arm64.zip")
 
         let digest = String(repeating: "a", count: 64)
         precondition(UpdateLogic.digestValue("sha256:\(digest)") == digest)

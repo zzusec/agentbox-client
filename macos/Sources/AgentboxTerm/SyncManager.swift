@@ -63,7 +63,7 @@ final class SyncManager {
         let support = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
-        )[0].appendingPathComponent("AgentboxTerm", isDirectory: true)
+        )[0].appendingPathComponent("agentbox-client", isDirectory: true)
         try FileManager.default.createDirectory(
             at: support,
             withIntermediateDirectories: true,

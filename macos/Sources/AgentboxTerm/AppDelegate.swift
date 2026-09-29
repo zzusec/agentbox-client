@@ -32,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appItem.submenu = appMenu
 
         appMenu.addItem(
-            withTitle: "关于 Agentbox Term",
+            withTitle: "关于 agentbox-client",
             action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
             keyEquivalent: ""
         )
@@ -57,7 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(.separator())
 
         appMenu.addItem(
-            withTitle: "退出 Agentbox Term",
+            withTitle: "退出 agentbox-client",
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )
@@ -96,7 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "Agentbox Term"
+        window.title = "agentbox-client"
         window.contentViewController = content
         window.minSize = NSSize(width: 900, height: 600)
         let controller = NSWindowController(window: window)

@@ -79,7 +79,7 @@ final class UpdateManager {
 
     private func latestRelease() async throws -> GitHubRelease {
         var request = URLRequest(url: releaseAPI)
-        request.setValue("AgentboxTerm/\(Bundle.main.shortVersion)", forHTTPHeaderField: "User-Agent")
+        request.setValue("agentbox-client/\(Bundle.main.shortVersion)", forHTTPHeaderField: "User-Agent")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
@@ -128,7 +128,7 @@ final class UpdateManager {
             throw UpdateError.message("下载更新失败")
         }
         let target = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AgentboxTerm-\(UUID().uuidString).zip")
+            .appendingPathComponent("agentbox-client-\(UUID().uuidString).zip")
         try FileManager.default.moveItem(at: temporary, to: target)
         return target
     }
@@ -168,7 +168,7 @@ final class UpdateManager {
 
     private func unzipAndValidate(_ archive: URL, expectedVersion: String) throws -> URL {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AgentboxTerm-update-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("agentbox-client-update-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try run("/usr/bin/ditto", ["-x", "-k", archive.path, directory.path])
         let contents = try FileManager.default.contentsOfDirectory(
@@ -198,7 +198,7 @@ final class UpdateManager {
         guard FileManager.default.isWritableFile(atPath: parent.path) else {
             throw UpdateError.message("没有权限替换 \(target.path)")
         }
-        let staging = parent.appendingPathComponent(".AgentboxTerm-update-\(UUID().uuidString).app")
+        let staging = parent.appendingPathComponent(".agentbox-client-update-\(UUID().uuidString).app")
         try run("/usr/bin/ditto", [source.path, staging.path])
         let script = try writeInstaller()
         let process = Process()

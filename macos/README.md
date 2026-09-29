@@ -1,6 +1,6 @@
-# Agentbox Term for macOS
+# agentbox-client for macOS
 
-Agentbox Term is a native macOS terminal for agentbox workspaces. It uses
+agentbox-client is a native macOS terminal for agentbox workspaces. It uses
 SwiftTerm for terminal emulation and a Go `abox-sync` sidecar for project
 synchronization.
 
@@ -16,7 +16,7 @@ Requirements:
 ```bash
 cd macos
 ./scripts/build-app.sh
-open "dist/Agentbox Term.app"
+open "dist/agentbox-client.app"
 ```
 
 The build vendors SwiftTerm 1.5.0 under `third_party/swiftterm`, so building
@@ -26,7 +26,7 @@ does not fetch GitHub dependencies.
 
 1. Sign in to agentbox in a browser.
 2. Open the user menu and choose `连接 Mac 终端`.
-3. Paste the copied pairing code into Agentbox Term.
+3. Paste the copied pairing code into agentbox-client.
 4. Select a workspace in the left sidebar.
 5. Choose a local project root and select the initial side for projects that
    already exist both locally and remotely.
@@ -48,8 +48,8 @@ other devices continue to receive server changes.
 
 ## Updates
 
-Agentbox Term checks the latest GitHub release on launch and every four hours.
-When `自动检查并准备更新` is enabled, it downloads `AgentboxTerm-macos-arm64.zip`,
+agentbox-client checks the latest GitHub release on launch and every four hours.
+When `自动检查并准备更新` is enabled, it downloads `agentbox-client-macos-arm64.zip`,
 verifies the release SHA-256 digest, verifies the `.app` code signature and only
 then offers to restart into the new version. `检查更新…` in the application menu
 runs the same flow immediately.
@@ -66,8 +66,8 @@ macos/scripts/release-app.sh 0.2.1
 This produces:
 
 ```text
-macos/dist/AgentboxTerm-macos-arm64-v0.2.1.zip
-macos/dist/AgentboxTerm-macos-arm64-v0.2.1.zip.sha256
+macos/dist/agentbox-client-macos-arm64-v0.2.2.zip
+macos/dist/agentbox-client-macos-arm64-v0.2.2.zip.sha256
 ```
 
 The GitHub release tag must be `v0.2.1` and the ZIP asset name must remain

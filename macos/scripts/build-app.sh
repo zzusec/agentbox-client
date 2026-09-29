@@ -9,7 +9,7 @@ version=${AGENTBOX_VERSION:-}
 swift build -c release
 go build -o "$root/.build/release/abox-sync" ../cmd/abox-sync
 
-app="$root/dist/Agentbox Term.app"
+app="$root/dist/agentbox-client.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$root/.build/release/AgentboxTerm" "$app/Contents/MacOS/AgentboxTerm"

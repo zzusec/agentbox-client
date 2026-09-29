@@ -73,7 +73,7 @@ See the [development guide](docs/development.md#文档截图) for instructions t
 | --- | --- | --- |
 | **Browser chat** | Assign coding tasks, view streaming results, and manage multiple conversations | Users only need a browser; an administrator deploys the server first |
 | **Browser terminal** | Use the original CLI, run commands, and install project dependencies | CLIs and common tools are included in the workspace image |
-| **Agentbox Term for macOS** | Native terminal, per-project Claude, drag-and-drop upload, and bidirectional local project sync | Build from source; see [macOS client](macos/README.md) |
+| **agentbox-client for macOS** | Native terminal, per-project Claude, drag-and-drop upload, and bidirectional local project sync | Build from source; see [macOS client](macos/README.md) |
 | **abox-link local panel** | Let cloud workspaces access private services reachable from your computer | Run `abox-link` on your computer |
 | **abox-link command line** | Configure allowlists and port mappings on a headless machine | Use the same `abox-link` binary with `--server` |
 | **HTTP / WebSocket API** | Integrate scripts, manage workspaces, and read usage records | Use the Bearer token obtained after login |
