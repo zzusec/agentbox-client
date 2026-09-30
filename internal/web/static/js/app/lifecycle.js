@@ -10,6 +10,7 @@ import { initRouter } from "./router.js";
 import { initPricing } from "../pricing.js";
 import { initUpdates } from "../updates.js";
 import { initProjects } from "../projects.js";
+import { initRemoteBrowser } from "../remote-browser.js";
 /** App-owned feature lifetime; each init can be safely repeated. */
 export function initApplication() {
     const lifetime = new AbortController();
@@ -32,7 +33,7 @@ export function initApplication() {
     };
     const start = () => {
         disposers.splice(0).reverse().forEach(dispose => dispose());
-        disposers = [initChat(), initSettings(), initUpdates(), initPricing(), initProjects()];
+        disposers = [initChat(), initSettings(), initUpdates(), initPricing(), initProjects(), initRemoteBrowser()];
     };
     bus.addEventListener("signed-in", start, { signal: lifetime.signal });
     bus.addEventListener("signed-out", stop, { signal: lifetime.signal });
