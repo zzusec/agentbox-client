@@ -142,6 +142,9 @@ func (s *Server) applyProxyBridge() error {
 // for TLS (which is what the model APIs are), and absolute-form requests for
 // plain http:// targets.
 func (s *Server) serveProxyBridge(w http.ResponseWriter, r *http.Request) {
+	if s.serveGitBridge(w, r) {
+		return
+	}
 	p, ok := s.bridgeAuth(w, r)
 	if !ok {
 		return

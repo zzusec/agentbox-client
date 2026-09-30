@@ -51,18 +51,8 @@ func (s *Server) gitTransport(ctx context.Context, c store.GitConnection, reposi
 	if credentialErr != nil {
 		return "", nil, credentialErr
 	}
-	pb := s.cfg.GetProxyBridge()
-	host, _, err := net.SplitHostPort(pb.Bind)
-	if err != nil {
-		return "", nil, errors.New("Git 传输网桥地址无效")
-	}
-	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
-	if err != nil {
-		return "", nil, errors.New("Git 传输网桥不可用，请检查 proxy_bridge.bind")
-	}
 	ticket := make([]byte, 32)
-	if _, err = rand.Read(ticket); err != nil {
-		ln.Close()
+	if _, err := rand.Read(ticket); err != nil {
 		return "", nil, err
 	}
 	grant := gitaccess.Grant{Ticket: hex.EncodeToString(ticket), Repository: repository, Write: write, Ref: ref, Old: old, New: next}
@@ -85,10 +75,29 @@ func (s *Server) gitTransport(ctx context.Context, c store.GitConnection, reposi
 	}
 	client, closeClient, err := s.gitClient(ctx, c)
 	if err != nil {
-		ln.Close()
 		return "", nil, errors.New("Git 网络路由不可用")
 	}
 	grant.Client = client
+	if endpoint, ok := s.gitBridgeEndpoint(); ok {
+		if bridgeGrant, registered := s.registerGitBridge(ctx, grant.Ticket, grant); registered {
+			return "http://" + endpoint + gitBridgePathPrefix + grant.Ticket, func() {
+				s.unregisterGitBridge(grant.Ticket, bridgeGrant)
+				bridgeGrant.Close()
+				closeClient()
+			}, nil
+		}
+	}
+	pb := s.cfg.GetProxyBridge()
+	host, _, err := net.SplitHostPort(pb.Bind)
+	if err != nil {
+		closeClient()
+		return "", nil, errors.New("Git 传输网桥地址无效")
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		closeClient()
+		return "", nil, errors.New("Git 传输网桥不可用，请检查 proxy_bridge.bind")
+	}
 	grantCtx, cancelGrant := context.WithCancel(ctx)
 	var handlers sync.WaitGroup
 	var gate sync.Mutex

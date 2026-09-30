@@ -57,9 +57,11 @@ func migrateLegacyUserDir(dataDir string) {
 }
 
 type Server struct {
-	gitOperations gitOperationRegistry
-	gitTerminal   gitTerminalRegistry
-	gitOAuth      gitOAuthState
+	gitOperations   gitOperationRegistry
+	gitTerminal     gitTerminalRegistry
+	gitOAuth        gitOAuthState
+	gitBridgeMu     sync.Mutex
+	gitBridgeGrants map[string]*gitBridgeGrant
 
 	gitVaultOnce  sync.Once
 	gitSecrets    *gitaccess.Vault
