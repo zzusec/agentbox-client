@@ -315,7 +315,7 @@ npm run check
 npm run build
 ```
 
-When editing `web/src/*.ts`, also commit the generated files in `internal/web/static/js/`. See the [development guide](docs/development.md) for Linux container checks, optional live model tests, and abox-link builds.
+When editing `web/src/*.ts`, also commit the generated files in `internal/web/static/js/`. See the [development guide](docs/development.md) for Linux container checks, optional live model tests, abox-link builds, and macOS native client regression commands. `sh macos/scripts/test-app-smoke.sh` exercises native workspace loading and directory-picker cancellation with synthetic responses, without saved credentials or production containers.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution steps, [SECURITY.md](SECURITY.md) for private vulnerability reporting, [CHANGELOG.md](CHANGELOG.md) for changes, and [third_party/](third_party/README.md) for third-party licenses. Binary candidates and installation workflows are described in the [release guide](docs/releases.md); pinned CLI versions are listed in the [compatibility matrix](docs/compatibility.md).
 

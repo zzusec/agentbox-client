@@ -315,7 +315,7 @@ npm run check
 npm run build
 ```
 
-修改 `web/src/*.ts` 后必须一起提交 `internal/web/static/js/` 的构建产物。Linux 容器验证、可选真实模型测试与 abox-link 构建见[开发指南](docs/development.md)。
+修改 `web/src/*.ts` 后必须一起提交 `internal/web/static/js/` 的构建产物。Linux 容器验证、可选真实模型测试、abox-link 构建与 macOS 原生客户端回归命令见[开发指南](docs/development.md)。`sh macos/scripts/test-app-smoke.sh` 使用合成响应验证原生工作空间加载与目录选择取消，不读取保存的凭据或操作生产容器。
 
 贡献步骤见 [CONTRIBUTING.md](CONTRIBUTING.md)，漏洞私密报告见 [SECURITY.md](SECURITY.md)，变化记录见 [CHANGELOG.md](CHANGELOG.md)，第三方许可见 [third_party/](third_party/README.md)。二进制候选包与安装流程见 [发布说明](docs/releases.md)，固定 CLI 版本见 [兼容矩阵](docs/compatibility.md)。
 

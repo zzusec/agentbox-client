@@ -7,6 +7,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     private let splitView = NSSplitView()
     private var workspaces: [Workspace] = []
     private var workspace: Workspace?
+    private var selectionGeneration = 0
     private var terminals: [String: TerminalViewController] = [:]
     private var syncManager: SyncManager?
     private var sidebarCollapsed = false
@@ -92,6 +93,8 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     }
 
     private func select(_ workspace: Workspace) {
+        selectionGeneration += 1
+        let generation = selectionGeneration
         self.workspace = workspace
         syncManager?.stop()
         syncManager = nil
@@ -100,12 +103,15 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         if let root {
             startSync(workspace, localRoot: URL(fileURLWithPath: root, isDirectory: true))
         }
+        sidebar.setProjects([])
         sidebar.setStatus("正在读取项目…")
         Task { @MainActor in
             do {
                 let projects = try await client.projects(in: workspace)
+                guard selectionGeneration == generation else { return }
                 sidebar.setProjects(projects)
             } catch {
+                guard selectionGeneration == generation else { return }
                 sidebar.setProjects([])
                 sidebar.setStatus("读取项目失败：\(error.localizedDescription)")
             }

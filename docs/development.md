@@ -250,3 +250,18 @@ python3 scripts/test-mcp-server.py --binary /tmp/agentbox-linux --image agentbox
 ```
 
 `test-mcp-live.py` 使用临时容器、空 home、禁用外网和本地模拟 Anthropic API，验证原生配置写入、stdio/HTTP JSON/SSE 工具发现、Claude 实际工具调用、取消与超时清理。`test-mcp-server.py` 用独立 Docker volume 启动真实 Go 服务，覆盖 HTTP 管理接口、已运行空间同步、冲突接管与删除，并清理自己的容器和卷。两者不读真实凭证、不发付费模型请求，也不代表生产第三方 MCP 的网络或 OAuth 已验收。
+
+## macOS 原生客户端回归
+
+在有桌面会话的 macOS 上运行：
+
+```sh
+swift build --package-path macos --disable-index-store -j 4
+sh macos/scripts/test-update-logic.sh
+sh macos/scripts/test-terminal-rendering.sh
+sh macos/scripts/test-app-smoke.sh
+```
+
+App smoke 运行真实 AppKit 控件与合成 URLProtocol 响应，覆盖工作空间切换时旧响应/旧错误的隔离、加载期间清空旧项目、终端 URL 编码、侧栏缩放/折叠、首次点击及目录选择 sheet 取消。它不启动正式 AppDelegate，不读取保存的登录信息，不更改真实同步目录，也不启动容器或调用模型。`AGENTBOX_APP_SMOKE_KEEP_OPEN=1` 可将合成窗口保留两分钟供检查。中文渲染自检覆盖常用中文、颜色/样式和下划线，不保证系统字体未包含的所有扩展汉字都能显示。
+
+候选包可用 `sh macos/scripts/release-app.sh VERSION` 构建，再用 `codesign --verify --deep --strict macos/dist/agentbox-client.app` 检查签名，并在 `macos/dist` 内执行 `shasum -a 256 -c *.zip.sha256` 检查校验和。构建候选包不等于公开发布或替换已安装客户端；真实服务器 WebSocket、同步、拖放上传和更新下载仍需隔离环境的端到端联调。

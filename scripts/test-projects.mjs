@@ -32,7 +32,9 @@ export async function smoke(page) {
   let failList = false, failCreate = false, holdList = false, releaseList;
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => {
-    if (window === window.top) localStorage.setItem('agentbox_token', 'synthetic-project-token');
+    if (window !== window.top || sessionStorage.getItem('agentbox_test_projects_seeded')) return;
+    localStorage.setItem('agentbox_token', 'synthetic-project-token');
+    sessionStorage.setItem('agentbox_test_projects_seeded', '1');
   });
   await page.routeWebSocket('**/api/sessions/*/term?*', socket => { terminalURLs.push(socket.url()); });
   await page.routeWebSocket('**/api/sessions/*/chat?*', () => {});
@@ -226,6 +228,8 @@ export async function smoke(page) {
     await page.locator('#btn-logout').click();
     releaseList?.();
     await page.locator('#login').waitFor({ state: 'visible' });
+    await page.waitForLoadState('load');
+    assert.equal(await page.evaluate(() => localStorage.getItem('agentbox_token')), null, 'logout must survive reload without fixture reauthentication');
     assert.equal(await page.locator('.project-tile').count(), 0, 'logout clears project data');
     assert.deepEqual(writes.filter(write => write.path !== '/api/logout' && write.path !== '/api/sessions' && !write.path.endsWith('/projects')), [], 'no account/proxy/container lifecycle writes');
     assert.deepEqual(errors, []);
