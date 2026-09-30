@@ -243,11 +243,12 @@ window.addEventListener("keydown", (e) => {
 syncSidebar();
 /* ---- 顶栏：设置视图显示标题，工作台视图显示 状态灯+会话名+⋯菜单 ---- */
 const VIEW_TITLE = {
-    git: "Git 管理", settings: "系统设置", usage: "使用记录", tunnel: "内网隧道",
+    workspaces: "工作空间配置", git: "Git 管理", settings: "系统设置", usage: "使用记录", tunnel: "内网隧道",
 };
 export function updateTopbarTitle() {
     const inWork = S.view === "work" && !!S.current;
-    $("topbar-title").textContent = VIEW_TITLE[S.view] || (S.current ? S.current.name : "");
+    $("topbar-title").textContent = VIEW_TITLE[S.view] || (S.project?.name || S.current?.name || "项目");
+    $("topbar-user").textContent = S.user;
     const led = $("tb-led");
     led.classList.toggle("hidden", !inWork);
     led.classList.toggle("on", inWork && S.current.status === "running");
@@ -269,11 +270,12 @@ export function showView(name) {
     S.view = name;
     emit("view-changed", name);
     $("view-work").classList.toggle("hidden", name !== "work");
+    $("view-workspaces").classList.toggle("hidden", name !== "workspaces");
     $("view-git").classList.toggle("hidden", name !== "git");
     $("view-settings").classList.toggle("hidden", name !== "settings");
     $("view-usage").classList.toggle("hidden", name !== "usage");
     $("view-tunnel").classList.toggle("hidden", name !== "tunnel");
-    for (const [id, view] of [["btn-git-management", "git"], ["btn-settings", "settings"], ["btn-usagelog", "usage"], ["btn-tunnel", "tunnel"]]) {
+    for (const [id, view] of [["btn-workspaces", "workspaces"], ["btn-git-management", "git"], ["btn-settings", "settings"], ["btn-usagelog", "usage"], ["btn-tunnel", "tunnel"]]) {
         $(id).classList.toggle("active", name === view);
         if (name === view)
             $(id).setAttribute("aria-current", "page");
@@ -291,6 +293,12 @@ $("btn-tunnel").addEventListener("click", () => emit("open-tunnel"));
 /* ---- 侧栏：会话列表 ---- */
 export function renderSidebar() {
     renderUserMenu();
+    const home = S.view === "work" && !S.current;
+    $("btn-projects").classList.toggle("active", home);
+    if (home)
+        $("btn-projects").setAttribute("aria-current", "page");
+    else
+        $("btn-projects").removeAttribute("aria-current");
     const list = $("session-list");
     const scrollTop = list.scrollTop;
     const focusedID = document.activeElement?.closest(".session-card")?.dataset.sessionId;
@@ -299,8 +307,8 @@ export function renderSidebar() {
     if (!S.sessions.length) {
         const p = document.createElement("p");
         p.className = "session-empty";
-        p.innerHTML = '<span class="session-empty-icon" aria-hidden="true">—</span><span class="session-empty-text">还没有工作空间，点击上方新建。</span>';
-        setTip(p, "还没有工作空间，点击上方新建");
+        p.innerHTML = '<span class="session-empty-icon" aria-hidden="true">—</span><span class="session-empty-text">还没有工作空间，请前往工作空间配置。</span>';
+        setTip(p, "请前往工作空间配置创建工作空间");
         list.appendChild(p);
     }
     for (const sess of S.sessions) {

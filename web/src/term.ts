@@ -217,7 +217,9 @@ function connectTermWS(isReconnect: boolean) {
   }
   setConnStatus(isReconnect ? "reconnecting" : "connecting");
 
-  const ws = new WebSocket(wsURL(`/sessions/${sess.id}/term`));
+  const project = S.project;
+  const params = project ? `&mode=agent&project=${encodeURIComponent(project.name)}` : "";
+  const ws = new WebSocket(wsURL(`/sessions/${sess.id}/term`) + params);
   ws.binaryType = "arraybuffer";
   S.termWS = ws;
 

@@ -77,6 +77,7 @@ export async function smoke(page) {
   else if(path === '/api/tunnel/status') body={enabled:true,transparent:true,client_transparent:true,connected:true,proxy_up:true,since:Date.now()-10000,remote:'192.0.2.10:1234',maps:[],rules:['db.corp:5432','10.20.0.0/16'],workspaces:[{session:'fixture-space',name:'Fixture workspace',ready:true}]};
   else if(path === '/api/tunnel/probe') { assert.equal(route.request().postDataJSON().target,'db.corp:5432'); body={ok:true,elapsed_ms:12}; }
   else if(path === '/api/sessions') body=sessions;
+  else if(path.startsWith('/api/sessions/') && path.endsWith('/projects')) body=[];
   else if(path.endsWith('/models') && path.startsWith('/api/sessions/')) body={models:settings.models.codex,default_reasoning:{support:'unknown',control:'effort'},discovery:'available'};
   else if(path === '/api/accounts') {
    if(route.request().method()==='POST') {

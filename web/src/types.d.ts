@@ -29,6 +29,14 @@ export interface Session {
   account_label: string;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  path: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AccountAccess {
   mode: "all" | "users" | "admin";
   users?: string[];

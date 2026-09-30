@@ -9,6 +9,7 @@ import { settingsState } from "../features/settings/state.js";
 import { initRouter } from "./router.js";
 import { initPricing } from "../pricing.js";
 import { initUpdates } from "../updates.js";
+import { initProjects } from "../projects.js";
 
 /** App-owned feature lifetime; each init can be safely repeated. */
 export function initApplication() {
@@ -19,12 +20,12 @@ export function initApplication() {
   disposers.splice(0).reverse().forEach(dispose => dispose());
   stopPolling(); stopPing(); termSpendPolling(false); termTeardown();
   settingsState.value = null;
-  S.current = null; S.sessions = []; S.accounts = []; S.user = ""; S.role = "";
+  S.current = null; S.project = null; S.sessions = []; S.accounts = []; S.user = ""; S.role = "";
   showView("work");
  };
  const start = () => {
   disposers.splice(0).reverse().forEach(dispose => dispose());
-  disposers = [initChat(), initSettings(), initUpdates(), initPricing()];
+  disposers = [initChat(), initSettings(), initUpdates(), initPricing(), initProjects()];
  };
  bus.addEventListener("signed-in", start, { signal: lifetime.signal });
  bus.addEventListener("signed-out", stop, { signal: lifetime.signal });

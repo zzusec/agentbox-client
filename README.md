@@ -198,9 +198,9 @@ Then open the same address in your local browser and sign in with **`boxadmin` a
 
 1. Open System settings → Account pool (`系统设置 → 账号池`) and add a Claude or Codex account.
 2. Choose Subscription OAuth or API key / relay in the same dialog, and configure its name, access scope, and egress proxy. For Claude subscriptions, paste the authorization code; for Codex subscriptions, paste the complete callback URL. For API / relay accounts, enter the endpoint and key. See [accounts and models](docs/accounts-and-models.md).
-3. Create a workspace, enter a name, and select an agent and account.
-4. Upload a project in Files (`文件`), or open Terminal (`终端`) and run `git clone`.
-5. Send a task in Chat (`对话`). When it finishes, review the diff in Changes (`变更`), then commit or download files.
+3. Open Workspace configuration (`工作空间配置`) to create a workspace and select an existing agent and account. Existing account, proxy, and container configuration is unchanged.
+4. On the Projects homepage (`项目`), select New project (`新建项目`) and choose its workspace. Projects share that workspace's account, egress proxy, and container; each has a directory under `/workspace` and its own Agent terminal.
+5. Open a project to work in its Agent terminal. Space files (`空间文件`) can browse the entire workspace; Web chat, history, and Git review remain workspace-scoped and are accessed through the workspace shortcut. Local sync paths are managed by the Mac client, not the browser.
 
 ### 6. Run as a service
 

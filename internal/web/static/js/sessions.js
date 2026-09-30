@@ -14,14 +14,16 @@ import { termTeardown, termDisconnect, openTerm, termSpendPolling } from "./term
 import { resetTree, loadFiles } from "./files.js";
 import { loadChanges, resetChangesRepo } from "./changes.js";
 import { loadSkills } from "./skills.js";
-import { agentKey, agentName, agentIcon, agentAvatar, decorateAgentOpts } from "./brand.js";
+import { agentKey, agentName, agentAvatar, decorateAgentOpts } from "./brand.js";
 import { openAcctUsage, syncUsageBtn } from "./acct-usage.js";
 import { setTip } from "./tip.js";
 /* ---------------- 打开 / 切换 ---------------- */
-export async function openSession(sess, tab) {
+export async function openSession(sess, tab, project) {
+    if (project && tab !== "files")
+        tab = "term";
     if (sess.agent !== "claude" && tab === "skills")
         tab = "chat";
-    if (S.current && S.current.id === sess.id) {
+    if (S.current && S.current.id === sess.id && S.project?.id === project?.id) {
         showView("work");
         if (tab && tab !== S.tab)
             setTab(tab);
@@ -30,22 +32,28 @@ export async function openSession(sess, tab) {
     closeChannels();
     showView("work");
     S.current = sess;
-    S.filePath = "";
+    S.project = project || null;
+    S.filePath = project?.name || "";
+    if (project)
+        S.fileScope = "workspace";
     resetTree();
     resetChangesRepo();
     resetChatImgs();
-    loadPick();
+    if (!project)
+        loadPick();
     $("empty").classList.add("hidden");
     $("workbench").classList.remove("hidden");
     $("chat-log").replaceChildren();
     setThreadBar(null); // 切换会话时先清掉上一个会话的线程标题
-    S.histLoading = true; // loadHistory 还没跑之前也不要闪引导页
+    S.histLoading = !project; // loadHistory 还没跑之前也不要闪引导页
     updateHero();
     setTab(tab || "chat");
     renderSidebar();
     renderHead();
+    if (project)
+        return;
     await loadHistory();
-    if (S.current?.id === sess.id)
+    if (S.current?.id === sess.id && !S.project)
         connectChat();
 }
 export function renderHead() {
@@ -53,7 +61,7 @@ export function renderHead() {
     if (!sess)
         return;
     updateTopbarTitle();
-    $("wb-name").textContent = sess.name;
+    $("wb-name").textContent = S.project?.name || sess.name;
     const av = agentAvatar(sess.agent, { size: 32, icon: 17, led: true });
     setTip(av, agentName(sess.agent));
     if (sess.status === "running")
@@ -65,9 +73,17 @@ export function renderHead() {
     an.className = "agent-text agent-" + agentKey(sess.agent);
     an.textContent = agentName(sess.agent);
     meta.append(an, document.createTextNode(` · ${sess.account_label} · #${sess.id}`));
+    if (S.project)
+        meta.append(document.createTextNode(` · ${sess.name} · ${S.project.path}`));
+    $("workbench").classList.toggle("project-workbench", !!S.project);
+    $("project-scope-note").classList.toggle("hidden", !S.project);
+    for (const name of ["chat", "changes"]) {
+        document.querySelector(`.tab[data-tab="${name}"]`).classList.toggle("hidden", !!S.project);
+    }
+    document.querySelector('.tab[data-tab="files"] .t').textContent = S.project ? "空间文件" : "文件";
     // 技能是 Claude Code 的机制，codex 会话没有对应目录，页签直接藏掉
     const claude = agentKey(sess.agent) === "claude";
-    $("tab-btn-skills").classList.toggle("hidden", !claude);
+    $("tab-btn-skills").classList.toggle("hidden", !claude || !!S.project);
     if (!claude && S.tab === "skills")
         setTab("chat");
     syncUsageBtn(sess.agent);
@@ -96,6 +112,8 @@ bus.addEventListener("data-updated", () => { if (S.current)
     renderHead(); });
 /* ---------------- 标签页 ---------------- */
 export function setTab(name) {
+    if (S.project && name !== "term" && name !== "files")
+        name = "term";
     S.tab = name;
     emit("navigation-changed");
     for (const t of document.querySelectorAll(".tab")) {
@@ -283,28 +301,24 @@ $("del-form").addEventListener("submit", async (e) => {
 });
 /* ---------------- 新建会话 ---------------- */
 decorateAgentOpts($("new-form"));
-/* 空状态：亮明本箱预装的两家 Agent CLI；CTA 与侧栏「新建会话」同一入口 */
-for (const a of ["claude", "codex"]) {
-    const chip = document.createElement("span");
-    chip.className = "brand-chip agent-" + a;
-    chip.append(agentIcon(a, 14), agentName(a));
-    $("empty-brands").append(chip);
-}
-$("empty-new").addEventListener("click", () => $("btn-new").click());
 /* 侧栏字标 = 首页入口：放下当前会话回到空状态（只断前端通道，容器不动） */
 export function openHome() {
     if (S.current) {
         closeChannels();
         S.current = null;
     }
+    S.project = null;
     $("workbench").classList.add("hidden");
     $("empty").classList.remove("hidden");
     showView("work"); /* 已在工作台时走早退分支，仍会收抽屉 */
     updateTopbarTitle();
     renderSidebar();
+    emit("navigation-changed");
+    emit("projects-home");
 }
 $("btn-home").addEventListener("click", openHome);
-$("btn-new").addEventListener("click", async () => {
+$("btn-projects").addEventListener("click", openHome);
+$("btn-new-workspace").addEventListener("click", async () => {
     fillAccountSelect();
     $("new-error").classList.add("hidden");
     $("dlg-new").showModal();
@@ -366,7 +380,8 @@ $("new-form").addEventListener("submit", async (e) => {
         $("dlg-new").close();
         $("new-name").value = "";
         await refreshAll();
-        openSession(sess);
+        showView("workspaces");
+        toast("工作空间已创建，现在可以在其中新建项目");
     }
     catch (err) {
         $("new-error").textContent = err.message;

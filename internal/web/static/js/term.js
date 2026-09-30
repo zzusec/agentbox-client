@@ -238,7 +238,9 @@ function connectTermWS(isReconnect) {
         $("term-loading").classList.remove("hidden"); // 大遮罩仅首次/手动连接时出现
     }
     setConnStatus(isReconnect ? "reconnecting" : "connecting");
-    const ws = new WebSocket(wsURL(`/sessions/${sess.id}/term`));
+    const project = S.project;
+    const params = project ? `&mode=agent&project=${encodeURIComponent(project.name)}` : "";
+    const ws = new WebSocket(wsURL(`/sessions/${sess.id}/term`) + params);
     ws.binaryType = "arraybuffer";
     S.termWS = ws;
     ws.onopen = () => {

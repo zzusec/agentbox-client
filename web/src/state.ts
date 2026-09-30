@@ -15,7 +15,7 @@
 "use strict";
 
 import type {
-  Account, ModelOption, Quota, Session, TerminalTips, Thread,
+  Account, ModelOption, Project, Quota, Session, TerminalTips, Thread,
 } from "./types.js";
 
 export const bus = new EventTarget();
@@ -23,7 +23,7 @@ export const emit = (type: string, detail?: unknown) =>
   bus.dispatchEvent(new CustomEvent(type, { detail }));
 
 /** 主区当前视图 */
-export type View = "work" | "settings" | "usage" | "tunnel" | "git";
+export type View = "work" | "workspaces" | "settings" | "usage" | "tunnel" | "git";
 /** 工作台当前标签页 */
 export type Tab = "chat" | "term" | "files" | "changes" | "skills";
 /** 文件浏览范围（shared = 共享目录，同用户所有会话可见） */
@@ -50,6 +50,7 @@ export interface AppState {
   accounts: Account[];
   /** 当前会话对象 */
   current: Session | null;
+  project: Project | null;
   /** 主区当前视图 */
   view: View;
   /** 设置页当前分区 */
@@ -90,6 +91,7 @@ export const S: AppState = {
   sessions: [],
   accounts: [],
   current: null,
+  project: null,
   view: "work",
   sec: "accounts",
   gitSec: "guide",

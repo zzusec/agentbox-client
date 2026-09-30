@@ -22,6 +22,7 @@ export const S = {
     sessions: [],
     accounts: [],
     current: null,
+    project: null,
     view: "work",
     sec: "accounts",
     gitSec: "guide",
