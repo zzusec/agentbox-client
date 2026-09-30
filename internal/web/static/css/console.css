@@ -23,7 +23,8 @@
   --shadow-md: 0 8px 24px rgb(15 23 42 / 8%);
 }
 .btn { border-radius: 10px; }
-.topbar { display: flex; min-height: 64px; padding: 10px 24px; gap: 18px; }
+/* 顶栏仅窄屏出现（shell.css 默认 display:none，≤760px 才 flex）；
+ * 桌面侧栏已有品牌/主题/用户，顶栏整体隐藏避免双导航。 */
 .console-brand { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 700; }
 .console-brand .mark { width: 30px; height: 30px; margin: 0; }
 .console-brand small { display: block; color: var(--muted); font-size: 11px; font-weight: 500; margin-top: 1px; }
@@ -114,8 +115,6 @@
 .wb-head { background: var(--panel); }
 dialog:not(.dlg-file):not(.dlg-img) { border-radius: 18px; }
 @media (min-width: 761px) {
-  .topbar #btn-menu { display: none; }
-  .topbar .tb-title { margin-left: 20px; padding-left: 20px; border-left: 1px solid var(--line); }
   :root[data-sidebar-collapsed="true"] .console-nav { padding-inline: 8px; }
   :root[data-sidebar-collapsed="true"] .console-nav > .side-label { display: none; }
   :root[data-sidebar-collapsed="true"] .console-nav .side-item { padding: 0; justify-content: center; }

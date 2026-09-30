@@ -9,6 +9,7 @@ import { settingsState } from "../features/settings/state.js";
 import { initRouter } from "./router.js";
 import { initPricing } from "../pricing.js";
 import { initUpdates } from "../updates.js";
+import { initMCP } from "../mcp.js";
 import { initProjects } from "../projects.js";
 import { initRemoteBrowser } from "../remote-browser.js";
 
@@ -26,7 +27,7 @@ export function initApplication() {
  };
  const start = () => {
   disposers.splice(0).reverse().forEach(dispose => dispose());
-  disposers = [initChat(), initSettings(), initUpdates(), initPricing(), initProjects(), initRemoteBrowser()];
+  disposers = [initChat(), initMCP(), initSettings(), initUpdates(), initPricing(), initProjects(), initRemoteBrowser()];
  };
  bus.addEventListener("signed-in", start, { signal: lifetime.signal });
  bus.addEventListener("signed-out", stop, { signal: lifetime.signal });

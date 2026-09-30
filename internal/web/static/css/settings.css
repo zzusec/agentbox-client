@@ -389,6 +389,7 @@
 .price-catalog .field { min-width: 0; }
 .price-catalog .field input, .price-catalog .field-row > .btn { height: 36px; }
 .price-catalog .field input { padding-block: 7px; font-size: 13px; line-height: 20px; }
+.price-sync-options { display: flex; flex-wrap: wrap; gap: 8px 20px; }
 .price-auto { display: flex; align-items: center; gap: 6px; min-height: 36px; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 .price-auto input { margin: 0; }
 .price-notice { padding: 10px 12px; margin: 0; border-left: 3px solid var(--amber); background: color-mix(in srgb, var(--amber) 7%, transparent); font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }
@@ -434,3 +435,9 @@
   .price-history-row { flex-wrap: wrap; }
 }
 @media (prefers-reduced-motion: reduce) { .price-history summary::before { transition: none; } }
+
+/* CLI update status stays readable on narrow settings panels. */
+#image-update-card > p { margin: 0; line-height: 1.6; }
+#image-update-card .note { font-size: 12px; color: var(--muted); }
+.image-update-log { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; font-size: 12px; }
+.image-update-ref { overflow-wrap: anywhere; }

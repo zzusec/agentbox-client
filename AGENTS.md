@@ -294,7 +294,7 @@ data/
 
 - `internal/pricecatalog` 管理独立、版本化 JSON 候选与缓存；拉取不修改生效价格。旧前端快照迁入 `catalog.json`，明确未重新核验，不能填虚假的核验时间。远程目录要求四项显式单价、HTTPS 来源与核验时间；维护流程见 `docs/pricing-catalog.md`。
 - 管理接口 `/api/pricing`、`/check`、`/apply`、`/restore` 均为 admin；应用/编辑/回退带修订号防并发覆盖。旧配置行默认自定义；手动改价转自定义，目录应用不能静默覆盖自定义或删除消失模型。
-- `pricing_catalog`、`pricing_managed`、`pricing_history` 必须一起进入 Config 的 mutate/persist；价格历史最多 10 次，回退不改历史用量或目录地址。后台每日检查通过 server 生命周期运行，默认不联网、不自动应用。
+- `pricing_catalog`、`pricing_managed`、`pricing_history` 必须一起进入 Config 的 mutate/persist；价格历史最多 10 次，回退不改历史用量或目录地址。后台每日检查通过 server 生命周期运行，默认不联网、不自动应用。`modelsdev.go` 为精确 URL `https://models.dev/api.json` 提供第三方转换：Claude 5m 写入价校验后转 1h、GPT 明确 context tiers；缺项/未知规则进入 issues，不能填假核验时间。`auto_apply` 显式启用后仅在每日新成功拉取时更新已绑定当前 URL 的跟随模型；单价变化超过 25%、零价切换或长档规则变化留待手动核对。手动检查只预览；回退价格暂停自动跟随。
 - 网页回合与起标题用 `usage.Service.NewTally()` 在 CLI 调用前锁定整张表，Flush 不得重新读新价；终端仍首次入账锁定。用量 JSON 快照增补修订与目录来源，schema 无需加列。
 
 ### 额度与扣减
@@ -607,7 +607,8 @@ data/
   只覆盖会变的令牌。琥珀分两支：`--amber` 画线与文字（浅色下压深才有对比度），
   `--accent` 是实心块底色（两个主题下都要够亮以托住 `--on-accent` 的深色文字），与
   `internal/web/static/css/base.css` 的约定一致。
-- 会话镜像内禁用 CLI 自升级（`DISABLE_AUTOUPDATER=1`）；Claude/Codex 版本由 `images/agent/Dockerfile` 与 `scripts/auto-update-image.sh` 管理。
+- 会话镜像内禁用 CLI 自升级（`DISABLE_AUTOUPDATER=1`）；默认版本由 `images/agent/Dockerfile` 管理。网页「客户端更新」由 `internal/imageupdate` + `internal/dockerx/image_update.go` 执行，服务端生命周期内按系统时区每日调度；旧 `scripts/auto-update-image.sh` / systemd timer 仅供旧部署手动选择，网页管理时保持停用。
+- `image_updates` / `previous_agent_image` 必须进入 Config 的 mutate/persist；更新以当前镜像不可变 ID 为基础保留浏览器层，验证 CLI 版本后通过 `SwitchAgentImage` 比较原镜像与策略再原子切换，不能覆盖构建期间的新设置。回退暂停自动更新。任务单飞、可取消、30 分钟超时，失败不切换、不自动 prune。状态落在 data_dir/image-update-state.json。
 - `config.json`、`accounts/`、`data/` 含密钥和运行时状态，已在 `.gitignore`；不要提交。
 - 若改动影响用户可见行为、部署步骤、API 或配置字段，同步更新 `README.md` 与 `README_CN.md`，保持中英文内容一致（必要时也更新 `deploy/README.md`）。
 
@@ -666,7 +667,7 @@ data/
 
 ### 阶段 D 维护约定
 
-- 在线升级入口为 `internal/server/upgrade.go` + `deploy/update.py` + `web/src/updates.ts`。只支持经过探测的正式 Linux/systemd 发布布局；管理员只能提交已检查的版本号，不能传 URL/路径/命令。独立 systemd 临时服务执行下载与激活，复用 `.deploy.lock`、`release.stage/activate` 和兼容检查，状态落 `<app>/.update/state.json`；禁止在主服务子进程里直接停自身单元。发布包必须携带 update.py。校验和必需，归档拒绝链接/穿越/超限；版本切换后不自动回退数据库。`scripts/test-update.py` 模拟 systemd/下载，不代表真实 systemd 验收。
+- 在线升级入口为 `internal/server/upgrade.go` + `deploy/update.py` + `web/src/updates.ts`。只支持经过探测的 Linux/systemd 版本目录布局；开发版（含预发布、dirty）可切换到最新正式版而不比较版本高低，正式版之间仍禁止降级/重装，配置与 schema 兼容检查不可跳过；管理员只能提交已检查的版本号，不能传 URL/路径/命令。独立 systemd 临时服务执行下载与激活，复用 `.deploy.lock`、`release.stage/activate` 和兼容检查，状态落 `<app>/.update/state.json`；禁止在主服务子进程里直接停自身单元。发布包必须携带 update.py。校验和必需，归档拒绝链接/穿越/超限；版本切换后不自动回退数据库。`scripts/test-update.py` 模拟 systemd/下载，不代表真实 systemd 验收。
 
 - 独立部署入口 `deploy/release.py`；路径、迁移停机与回退条件见 `docs/architecture/deployment-layout.md`。install 不覆盖其他布局单元或已有版本；activate 先查 schema 和 compatibility_epoch，再备份/停机/切换。不能对旧库调用 store.Open 来做只读兼容检查。
 - cache_dir 缺省兼容 data_dir，配置 mutate/persist 必须保留原始路径；备份恢复重写 cache_dir，避免恢复实例碰原实例缓存。
@@ -692,3 +693,11 @@ data/
 - profile 存 `home/.agentbox-browser`，与空间同 UID；不承诺对同空间 Agent 隔离。备份须 `--full`。noVNC 使用原生 ES module，第三方哈希与许可证必须一起更新。UTF-8 剪贴板走单独接口，不依赖旧 VNC Latin-1。
 - 真实浏览器测试 `scripts/test-remote-browser-live.py` 用独立卷与合成站点，禁用空间外网，不访问真实用户网页或调用模型。`scripts/test-browser-runtime.py` 验证代理 HTTP/CONNECT/WebSocket 转发和失败不直连。
 - Chrome DNS 规则须显式 `EXCLUDE 127.0.0.1`，通配 `MAP * ~NOTFOUND` 也会阻止本地代理 IP。修改代理参数必须跑 `scripts/test-browser-proxy-live.py` 的真实浏览器回归，不能仅验证 Python 代理本身。
+
+### Claude MCP 管理
+
+- `internal/mcpconfig` 管理用户/空间独立配置、脱敏、修订和原生配置同步。源文件在容器挂载外的 users/<user>/mcp.json、sessions/<id>/mcp.json，均进入系统备份。不得复用 home 模板的整文件 mtime 覆盖规则。
+- 工作空间 MCP hook 覆盖已运行分支；网页当前回合期间跳过附带启动同步，runTurn 在执行 CLI 前显式同步并阻止冲突回合。终端保留修复入口。空间编辑通过 WithSession 防止 purge 后重建目录。
+- 只接管明确授权的原生用户级条目，记录 Applied/Pending 后通过容器 Claude 原生配置命令修改，取消后可重试。未知字段不做有损接管。当前终端 CLI 不承诺热更新；项目批准与插件仍由 CLI 管理。
+- `helper.py` 嵌入服务端，通过 python3 -I -c 在目标容器执行，敏感载荷走 stdin。stdin EOF 取消，独立 28 秒闹钟兜底，清理检测进程组；禁止宿主机执行 MCP 或返回原始 stderr。HTTP 支持 Streamable HTTP 的 JSON/SSE 响应，不含旧 SSE transport；首版检测不读取 CLI OAuth 凭证。
+- 回归：`go test ./internal/mcpconfig ./internal/server ./internal/workspace ./internal/backup`；`scripts/test-mcp.mjs` 纳入浏览器合成 API 测试；`python3 scripts/test-mcp-live.py` 使用固定镜像、隔离临时 home、network=none 与本地模拟模型验证真实工具调用，不发付费请求。`scripts/test-mcp-server.py --binary <Linux binary>` 验证真实 Go API→Docker 同步与检测，使用独立卷并清理。

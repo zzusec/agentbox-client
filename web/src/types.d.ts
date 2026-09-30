@@ -393,7 +393,10 @@ export interface TunnelConfig {
 }
 
 /** GET/PUT /api/settings（server.settingsView）。 */
+export interface ImageUpdateSettings { enabled: boolean; channel: "stable" | "latest"; time: string; update_codex: boolean }
+
 export interface Settings {
+  image_updates: ImageUpdateSettings;
  resources: ResourceLimits;
   listen: string;
   agent_image: string;
@@ -420,13 +423,14 @@ export interface Settings {
   restart_required: boolean;
 }
 
-/** Admin price catalog API. Candidate prices never become active implicitly. */
+/** Admin price catalog API. Automatic application is explicitly opt-in. */
 export interface PriceOrigin {
   version: string;
   source_url: string;
   verified_at?: string;
+  catalog_url?: string;
 }
-export interface PricingCatalogConfig { url: string; auto_check: boolean }
+export interface PricingCatalogConfig { url: string; auto_check: boolean; auto_apply?: boolean }
 export interface PricingRevision {
   id: string; saved_at: number; reason: string;
   prices: Record<string, ModelPrice>; managed: Record<string, PriceOrigin>;
@@ -440,6 +444,7 @@ export interface PriceCatalogEntry {
 }
 export interface PriceCatalog {
   schema: number; version: string; published_at: string; entries: Record<string, PriceCatalogEntry>;
+  source?: string; issues?: { model: string; reason: string }[];
 }
 export interface PriceCatalogStatus {
   catalog: PriceCatalog; revision: string; url: string; bundled: boolean;
@@ -447,7 +452,7 @@ export interface PriceCatalogStatus {
 }
 export interface PriceChange {
   model: string; kind: "new" | "update" | "custom" | "current" | "removed";
-  current?: ModelPrice; candidate?: PriceCatalogEntry;
+  current?: ModelPrice; candidate?: PriceCatalogEntry; auto_block_reason?: string;
 }
 export interface PricingView {
   active: PricingState; candidate: PriceCatalogStatus; changes: PriceChange[];
@@ -999,3 +1004,18 @@ export interface BrowserInfo {
  browser?: string;
  proxy: boolean;
 }
+
+/** MCP canonical definition; env/header values use a keep-secret marker on GET. */
+export interface MCPDefinition {
+ type: "stdio" | "http";
+ command?: string; args?: string[]; env?: Record<string, string>;
+ url?: string; headers?: Record<string, string>;
+}
+export interface MCPEntry { config: MCPDefinition; disabled?: boolean; }
+export interface MCPItem extends MCPEntry {
+ name: string; source: "user" | "session" | "native";
+ status: "configured" | "pending" | "pending_delete" | "applied" | "conflict" | "unmanaged" | "disabled";
+ native_revision?: string; native?: MCPDefinition;
+}
+export interface MCPView { revision: number; user_revision: number; items: MCPItem[]; project_names: string[]; external?: {name: string; source: "local" | "plugin"}[]; }
+export interface MCPCheck { status: string; tools?: {name: string; description: string}[]; truncated?: boolean; checked_at: string; }

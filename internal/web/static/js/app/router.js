@@ -4,7 +4,7 @@ import { SET_SECS } from "../settings.js";
 import { toast } from "../util.js";
 import { api } from "../api.js";
 const GIT_SECS = ["guide", "profile", "connections"];
-const TABS = ["chat", "term", "files", "changes", "skills", "browser"];
+const TABS = ["chat", "term", "files", "changes", "skills", "mcp", "browser"];
 function currentHash() {
     if (S.view === "git")
         return `#/git/${S.gitSec}`;

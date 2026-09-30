@@ -6,6 +6,9 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { resolve, extname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { responsiveSmoke } from './test-responsive.mjs';
+import { mcpSmoke } from './test-mcp.mjs';
+import { remoteBrowserSmoke } from './test-remote-browser.mjs';
+import { imageUpdateSmoke } from './test-image-updates.mjs';
 import { pricingSmoke } from './test-pricing.mjs';
 import { chatFooterSmoke } from './test-chat-footer.mjs';
 import { assertActionIcons, fileActionSmoke } from './test-actions.mjs';
@@ -56,6 +59,7 @@ export async function smoke(page) {
   else if(path === '/api/proxies') body={proxies:[],bridge_up:false,bridge_host:'127.0.0.1'};
   else if(path === '/api/pricing') body={active:{revision:'1',prices:{},managed:{},history:[],catalog:{url:'',auto_check:false}},candidate:null,changes:[],warnings:[]};
   else if(path === '/api/me/git/default') body={connection_id:''};
+  else if(path === '/api/image-updates') body={settings:{enabled:false,channel:'stable',time:'04:00',update_codex:false},agent_image:settings.agent_image,previous_image:'',timezone:'UTC',status:{running:false,current:{},target:{}}};
   else if(path === '/api/updates') { updateReads++; body=release; }
   else if(path === '/api/updates/upgrade') {
    if(route.request().method()==='POST') {
@@ -134,6 +138,23 @@ export async function smoke(page) {
   await page.locator('#sec-container').waitFor({state:'visible'});
   assert.equal(new URL(page.url()).hash,'#/settings/container','login preserves destination');
   assert.equal(await page.locator('#login-btn').isDisabled(),false);
+  if (process.env.AGENTBOX_BROWSER_ONLY_IMAGE_UPDATES === '1') {
+   await imageUpdateSmoke(page); assert.deepEqual(errors,[]); return;
+  }
+  if (process.env.AGENTBOX_BROWSER_ONLY_REMOTE === '1') {
+   await remoteBrowserSmoke(page); assert.deepEqual(errors,[]); return;
+  }
+  if (process.env.AGENTBOX_BROWSER_ONLY_MCP === '1') {
+   sessions = [{...sessions[0], agent:'claude'}];
+   await mcpSmoke(page);
+   assert.deepEqual(errors,[]);
+   return;
+  }
+  if (process.env.AGENTBOX_BROWSER_ONLY_PRICING === '1') {
+   await pricingSmoke(page);
+   assert.deepEqual(errors,[]);
+   return;
+  }
   // Transient /me errors must show a usable login form, including stored-token reload.
   await page.route('**/api/me',route=>route.fulfill({status:503,json:{error:'fixture unavailable'}}));
   await page.reload();
@@ -203,10 +224,16 @@ export async function smoke(page) {
   await check(); await status('检查未完成');
   nextRelease={latest_version:'',error:''};
   await check(); await status('暂无正式发布的版本');
-  nextRelease={current_version:'dev',latest_version:'v0.2.0',comparable:false};
-  await check(); await status('开发构建，无法比较版本');
-  nextRelease={current_version:'v0.1.0-rc.2-updates2',latest_version:'v0.2.0',comparable:true,available:true};
-  await check(); await status('v0.2.0 可用');
+  nextRelease={current_version:'dev',latest_version:'v0.2.0',comparable:false,available:true};
+  await check(); await status('可切换至正式版 v0.2.0');
+  assert.equal(await page.locator('#update-install').innerText(),'切换到正式版并重启');
+  assert.equal(await page.locator('#update-install > svg').count(),1,'switch button lost its icon');
+  await page.locator('#update-install').click();
+  assert.match(await page.locator('#dlg-ask').innerText(),/从开发构建 dev 切换至正式版 v0.2.0/);
+  assert.match(await page.locator('#dlg-ask').innerText(),/不兼容时会阻止切换/);
+  await page.locator('#ask-cancel').click();
+  nextRelease={current_version:'v0.3.0-dev.1',latest_version:'v0.2.0',comparable:false,available:true};
+  await check(); await status('可切换至正式版 v0.2.0');
   // Upgrade confirmation, lost submission response, reload recovery and actual-version verification.
   const upgradeMessage = text => page.locator('#upgrade-message').filter({hasText:text}).waitFor();
   await page.locator('#update-install').click();
@@ -248,7 +275,7 @@ export async function smoke(page) {
   await page.locator('#upgrade-support').filter({hasText:'手工升级'}).waitFor();
   assert.equal(await page.locator('#update-install').isVisible(),false);
   upgrade={supported:true,reason:'',current_version:release.current_version,job:null};
-  await check(); await status('v0.2.0 可用');
+  await check(); await status('可切换至正式版 v0.2.0');
   await page.locator('#btn-sidebar-toggle').click();
   await page.locator('#version-badge').click();
   await screenshot('collapsed');
@@ -282,6 +309,7 @@ export async function smoke(page) {
   await page.evaluate(async () => { const m=await import('/_v/{{BUILD}}/js/settings.js');m.initSettings();m.initSettings(); });
   await page.locator('#btn-save-resources').click();
   await page.waitForTimeout(100);assert.equal(settingsWrites,2);
+  await imageUpdateSmoke(page);
   // Account creation stays in one dialog; authorization failure is retryable.
   await page.locator('#set-nav [data-sec="accounts"]').click();
   await page.locator('#btn-acct-add').click();
@@ -562,6 +590,9 @@ export async function smoke(page) {
   assert.equal(await key('interrupt').isDisabled(),true);
   await page.setViewportSize({width:1280,height:900});
   assert.equal(await page.locator('#term-keys').isVisible(),false,'desktop toolbar should stay hidden');
+  await remoteBrowserSmoke(page);
+  sessions = [{...sessions[0], agent:"claude"}];
+  await mcpSmoke(page);
   sessions = [];
   await page.reload();
   await at('#/','#empty'); // Deleted or inaccessible workspace.

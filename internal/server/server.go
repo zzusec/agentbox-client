@@ -28,6 +28,8 @@ import (
 	"agentbox/internal/dockerx"
 	"agentbox/internal/gitaccess"
 	"agentbox/internal/gitx"
+	"agentbox/internal/imageupdate"
+	"agentbox/internal/mcpconfig"
 	"agentbox/internal/pricecatalog"
 	"agentbox/internal/store"
 	"agentbox/internal/usage"
@@ -57,6 +59,14 @@ func migrateLegacyUserDir(dataDir string) {
 }
 
 type Server struct {
+	imageUpdatesOnce sync.Once
+	imageUpdates     *imageupdate.Service
+
+	mcpOnce    sync.Once
+	mcp        *mcpconfig.Service
+	mcpCheckMu sync.Mutex
+	mcpChecks  map[string]bool
+
 	gitOperations   gitOperationRegistry
 	gitTerminal     gitTerminalRegistry
 	gitOAuth        gitOAuthState
@@ -279,6 +289,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/pricing/check", s.admin(http.HandlerFunc(s.handlePricingCheck)))
 	mux.Handle("POST /api/pricing/apply", s.admin(http.HandlerFunc(s.handlePricingApply)))
 	mux.Handle("POST /api/pricing/restore", s.admin(http.HandlerFunc(s.handlePricingRestore)))
+	mux.Handle("GET /api/image-updates", s.admin(http.HandlerFunc(s.handleImageUpdates)))
+	mux.Handle("POST /api/image-updates/{action}", s.admin(http.HandlerFunc(s.handleImageUpdateAction)))
 	mux.Handle("GET /api/settings", s.admin(http.HandlerFunc(s.handleGetSettings)))
 	mux.Handle("PUT /api/settings", s.admin(http.HandlerFunc(s.handlePutSettings)))
 	mux.Handle("GET /api/storage", s.admin(http.HandlerFunc(s.handleStorage)))
@@ -320,6 +332,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/sessions/{id}/file", s.auth(s.withSession(s.handleFilePut)))
 	mux.Handle("GET /api/sessions/{id}/preview", s.auth(s.withSession(s.handlePreviewGrant)))
 	mux.Handle("POST /api/sessions/{id}/images", s.auth(s.withSession(s.handleImageUpload)))
+	mux.Handle("POST /api/mcp/import", s.auth(http.HandlerFunc(s.handleMCPUserImport)))
+	mux.Handle("POST /api/sessions/{id}/mcp/import", s.auth(s.withSession(s.handleMCPSessionImport)))
+	mux.Handle("POST /api/sessions/{id}/mcp/{name}/copy", s.auth(s.withSession(s.handleMCPCopy)))
+	mux.Handle("GET /api/mcp", s.auth(http.HandlerFunc(s.handleMCPUser)))
+	mux.Handle("PUT /api/mcp/{name}", s.auth(http.HandlerFunc(s.handleMCPUser)))
+	mux.Handle("DELETE /api/mcp/{name}", s.auth(http.HandlerFunc(s.handleMCPUser)))
+	mux.Handle("GET /api/sessions/{id}/mcp", s.auth(s.withSession(s.handleMCPSession)))
+	mux.Handle("PUT /api/sessions/{id}/mcp/{name}", s.auth(s.withSession(s.handleMCPSession)))
+	mux.Handle("DELETE /api/sessions/{id}/mcp/{name}", s.auth(s.withSession(s.handleMCPSession)))
+	mux.Handle("POST /api/sessions/{id}/mcp/{name}/adopt", s.auth(s.withSession(s.handleMCPAdopt)))
+	mux.Handle("POST /api/sessions/{id}/mcp/{name}/check", s.auth(s.withSession(s.handleMCPCheck)))
 	mux.Handle("GET /api/marketplace", s.auth(http.HandlerFunc(s.handleMarketList)))
 	mux.Handle("POST /api/sessions/{id}/skills/market", s.auth(s.withSession(s.handleSkillMarketInstall)))
 	mux.Handle("GET /api/sessions/{id}/skills", s.auth(s.withSession(s.handleSkillList)))
@@ -413,6 +436,7 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	s.spawn(s.idleReaper)
 	s.spawn(s.storageLoop)
 	s.spawn(s.pricingLoop)
+	s.spawn(s.imageUpdateLoop)
 	s.spawn(s.termUsageLoop)
 	s.spawn(s.termWatchLoop)
 	s.spawn(s.tokenJanitor)
@@ -685,6 +709,7 @@ func (s *Server) workspaces() *workspace.Service {
 	s.workspaceOnce.Do(func() {
 		s.workspace = workspace.New(s.cfg, s.store, s.dock, s.sessionAccount, s.credentialService().Sync)
 		s.workspace.SetNetworkHook(s.ensureNetwork)
+		s.workspace.SetMCPHook(s.syncMCPOnStart)
 	})
 	return s.workspace
 }
