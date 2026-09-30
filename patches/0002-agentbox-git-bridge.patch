@@ -1,0 +1,308 @@
+diff --git a/internal/server/git_network.go b/internal/server/git_network.go
+index 7d27612..b0cdb9b 100644
+--- a/internal/server/git_network.go
++++ b/internal/server/git_network.go
+@@ -51,18 +51,8 @@ func (s *Server) gitTransport(ctx context.Context, c store.GitConnection, reposi
+ 	if credentialErr != nil {
+ 		return "", nil, credentialErr
+ 	}
+-	pb := s.cfg.GetProxyBridge()
+-	host, _, err := net.SplitHostPort(pb.Bind)
+-	if err != nil {
+-		return "", nil, errors.New("Git 传输网桥地址无效")
+-	}
+-	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+-	if err != nil {
+-		return "", nil, errors.New("Git 传输网桥不可用，请检查 proxy_bridge.bind")
+-	}
+ 	ticket := make([]byte, 32)
+-	if _, err = rand.Read(ticket); err != nil {
+-		ln.Close()
++	if _, err := rand.Read(ticket); err != nil {
+ 		return "", nil, err
+ 	}
+ 	grant := gitaccess.Grant{Ticket: hex.EncodeToString(ticket), Repository: repository, Write: write, Ref: ref, Old: old, New: next}
+@@ -85,10 +75,29 @@ func (s *Server) gitTransport(ctx context.Context, c store.GitConnection, reposi
+ 	}
+ 	client, closeClient, err := s.gitClient(ctx, c)
+ 	if err != nil {
+-		ln.Close()
+ 		return "", nil, errors.New("Git 网络路由不可用")
+ 	}
+ 	grant.Client = client
++	if endpoint, ok := s.gitBridgeEndpoint(); ok {
++		if bridgeGrant, registered := s.registerGitBridge(ctx, grant.Ticket, grant); registered {
++			return "http://" + endpoint + gitBridgePathPrefix + grant.Ticket, func() {
++				s.unregisterGitBridge(grant.Ticket, bridgeGrant)
++				bridgeGrant.Close()
++				closeClient()
++			}, nil
++		}
++	}
++	pb := s.cfg.GetProxyBridge()
++	host, _, err := net.SplitHostPort(pb.Bind)
++	if err != nil {
++		closeClient()
++		return "", nil, errors.New("Git 传输网桥地址无效")
++	}
++	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
++	if err != nil {
++		closeClient()
++		return "", nil, errors.New("Git 传输网桥不可用，请检查 proxy_bridge.bind")
++	}
+ 	grantCtx, cancelGrant := context.WithCancel(ctx)
+ 	var handlers sync.WaitGroup
+ 	var gate sync.Mutex
+diff --git a/internal/server/proxybridge.go b/internal/server/proxybridge.go
+index 6969118..196e9ca 100644
+--- a/internal/server/proxybridge.go
++++ b/internal/server/proxybridge.go
+@@ -142,6 +142,9 @@ func (s *Server) applyProxyBridge() error {
+ // for TLS (which is what the model APIs are), and absolute-form requests for
+ // plain http:// targets.
+ func (s *Server) serveProxyBridge(w http.ResponseWriter, r *http.Request) {
++	if s.serveGitBridge(w, r) {
++		return
++	}
+ 	p, ok := s.bridgeAuth(w, r)
+ 	if !ok {
+ 		return
+diff --git a/internal/server/server.go b/internal/server/server.go
+index 4d2ced1..157587b 100644
+--- a/internal/server/server.go
++++ b/internal/server/server.go
+@@ -57,9 +57,11 @@ func migrateLegacyUserDir(dataDir string) {
+ }
+ 
+ type Server struct {
+-	gitOperations gitOperationRegistry
+-	gitTerminal   gitTerminalRegistry
+-	gitOAuth      gitOAuthState
++	gitOperations   gitOperationRegistry
++	gitTerminal     gitTerminalRegistry
++	gitOAuth        gitOAuthState
++	gitBridgeMu     sync.Mutex
++	gitBridgeGrants map[string]*gitBridgeGrant
+ 
+ 	gitVaultOnce  sync.Once
+ 	gitSecrets    *gitaccess.Vault
+diff --git a/internal/server/git_bridge.go b/internal/server/git_bridge.go
+new file mode 100644
+index 0000000..1da0254
+--- /dev/null
++++ b/internal/server/git_bridge.go
+@@ -0,0 +1,121 @@
++package server
++
++import (
++	"context"
++	"net"
++	"net/http"
++	"strings"
++	"sync"
++)
++
++const gitBridgePathPrefix = "/.agentbox-git/"
++
++// gitBridgeGrant is one operation-scoped Git handler multiplexed through the
++// account-proxy bridge listener. The listener port is already reachable from
++// workspace containers, while fresh high ports may be blocked by host firewall
++// rules.
++type gitBridgeGrant struct {
++	handler http.Handler
++	ctx     context.Context
++	cancel  context.CancelFunc
++
++	gate   sync.Mutex
++	closed bool
++	wg     sync.WaitGroup
++}
++
++func (g *gitBridgeGrant) ServeHTTP(w http.ResponseWriter, r *http.Request) {
++	g.gate.Lock()
++	if g.closed {
++		g.gate.Unlock()
++		http.NotFound(w, r)
++		return
++	}
++	g.wg.Add(1)
++	g.gate.Unlock()
++	defer g.wg.Done()
++	g.handler.ServeHTTP(w, r.WithContext(g.ctx))
++}
++
++func (g *gitBridgeGrant) Close() {
++	g.gate.Lock()
++	if !g.closed {
++		g.closed = true
++		g.cancel()
++	}
++	g.gate.Unlock()
++	g.wg.Wait()
++}
++
++func (s *Server) registerGitBridge(ctx context.Context, ticket string, handler http.Handler) (*gitBridgeGrant, bool) {
++	if ticket == "" || handler == nil {
++		return nil, false
++	}
++	grantCtx, cancel := context.WithCancel(ctx)
++	g := &gitBridgeGrant{handler: handler, ctx: grantCtx, cancel: cancel}
++	s.gitBridgeMu.Lock()
++	defer s.gitBridgeMu.Unlock()
++	if s.gitBridgeGrants == nil {
++		s.gitBridgeGrants = map[string]*gitBridgeGrant{}
++	}
++	if _, exists := s.gitBridgeGrants[ticket]; exists {
++		cancel()
++		return nil, false
++	}
++	s.gitBridgeGrants[ticket] = g
++	return g, true
++}
++
++func (s *Server) unregisterGitBridge(ticket string, grant *gitBridgeGrant) {
++	s.gitBridgeMu.Lock()
++	if s.gitBridgeGrants[ticket] == grant {
++		delete(s.gitBridgeGrants, ticket)
++	}
++	s.gitBridgeMu.Unlock()
++}
++
++func (s *Server) gitBridgeGrant(ticket string) *gitBridgeGrant {
++	s.gitBridgeMu.Lock()
++	defer s.gitBridgeMu.Unlock()
++	return s.gitBridgeGrants[ticket]
++}
++
++func (s *Server) gitBridgeEndpoint() (string, bool) {
++	s.bridgeMu.Lock()
++	defer s.bridgeMu.Unlock()
++	if s.bridgeLn == nil || !s.bridgeUp.Load() {
++		return "", false
++	}
++	host := s.cfg.GetProxyBridge().Host
++	_, port, err := net.SplitHostPort(s.bridgeLn.Addr().String())
++	if host == "" || err != nil {
++		return "", false
++	}
++	return net.JoinHostPort(host, port), true
++}
++
++// serveGitBridge consumes only its reserved path. Proxy requests continue
++// through the existing authenticated proxy path unchanged.
++func (s *Server) serveGitBridge(w http.ResponseWriter, r *http.Request) bool {
++	if !strings.HasPrefix(r.URL.Path, gitBridgePathPrefix) {
++		return false
++	}
++	rest := strings.TrimPrefix(r.URL.Path, gitBridgePathPrefix)
++	ticket, suffix, ok := strings.Cut(rest, "/")
++	if !ok || ticket == "" || suffix == "" {
++		http.NotFound(w, r)
++		return true
++	}
++	grant := s.gitBridgeGrant(ticket)
++	if grant == nil {
++		http.NotFound(w, r)
++		return true
++	}
++	clone := r.Clone(r.Context())
++	u := *r.URL
++	u.Path = "/" + ticket + "/" + suffix
++	u.RawPath = ""
++	clone.URL = &u
++	grant.ServeHTTP(w, clone)
++	return true
++}
+diff --git a/internal/server/git_bridge_test.go b/internal/server/git_bridge_test.go
+new file mode 100644
+index 0000000..1230a59
+--- /dev/null
++++ b/internal/server/git_bridge_test.go
+@@ -0,0 +1,87 @@
++package server
++
++import (
++	"context"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"strings"
++	"testing"
++
++	"agentbox/internal/config"
++	"agentbox/internal/store"
++)
++
++func TestGitTransportUsesProxyBridgePort(t *testing.T) {
++	s, sess := newTestServer(t)
++	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		user, pass, ok := r.BasicAuth()
++		if !ok || user != "fixture" || pass != "synthetic-secret" {
++			t.Errorf("upstream auth = %q/%q", user, pass)
++			w.WriteHeader(http.StatusUnauthorized)
++			return
++		}
++		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
++		_, _ = io.WriteString(w, "001e# service=git-upload-pack\n0000")
++	}))
++	defer upstream.Close()
++
++	s.cfg.AuthToken = "a-long-enough-token"
++	s.cfg.ProxyBridge = config.ProxyBridgeConfig{Bind: "127.0.0.1:0", Host: "127.0.0.1"}
++	s.cfg.Proxies = []config.Proxy{{ID: "px1", Scheme: config.ProxySOCKS5, Host: "127.0.0.1", Port: 1}}
++	startBridge(t, s)
++
++	s.gitHTTPClient = func(context.Context, store.GitConnection) (*http.Client, func(), error) {
++		return upstream.Client(), func() {}, nil
++	}
++	c := createGitConnection(t, s, sess.User, upstream.URL, true)
++	transport, closeTransport, err := s.gitTransport(t.Context(), c, upstream.URL+"/repo.git", false, "", "", "")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer closeTransport()
++
++	u, err := url.Parse(transport)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if u.Scheme != "http" || u.Host != s.bridgeLn.Addr().String() || !strings.HasPrefix(u.Path, gitBridgePathPrefix) {
++		t.Fatalf("transport = %q, want shared bridge endpoint", transport)
++	}
++	ticket := strings.TrimPrefix(u.Path, gitBridgePathPrefix)
++	if s.gitBridgeGrant(ticket) == nil {
++		t.Fatal("Git grant is not registered on the shared bridge")
++	}
++
++	resp, err := http.Get(transport + "/info/refs?service=git-upload-pack")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		body, _ := io.ReadAll(resp.Body)
++		t.Fatalf("bridge response = %d %s", resp.StatusCode, body)
++	}
++
++	closeTransport()
++	if s.gitBridgeGrant(ticket) != nil {
++		t.Fatal("Git grant remained registered after transport close")
++	}
++}
++
++func TestGitBridgeUnknownTicketDoesNotFallThroughToProxyAuth(t *testing.T) {
++	upstream := startUpstreamSOCKS(t, "user", "pass")
++	s := bridgeTestServer(t, upstream, "user", "pass")
++	startBridge(t, s)
++
++	req := httptest.NewRequest(http.MethodGet, gitBridgePathPrefix+"missing/info/refs", nil)
++	w := httptest.NewRecorder()
++	s.serveProxyBridge(w, req)
++	if w.Code != http.StatusNotFound {
++		t.Fatalf("status = %d, want 404", w.Code)
++	}
++	if got := w.Header().Get("Proxy-Authenticate"); got != "" {
++		t.Fatalf("unknown Git ticket fell through to proxy auth: %q", got)
++	}
++}
