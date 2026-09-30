@@ -69,7 +69,7 @@
 
   --claude: #d97757; /* Claude 官方陶土橙（simple-icons 品牌色） */
   --openai: #10a37f; /* ChatGPT 官方青绿 */
-  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", monospace;
   --sans: -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
 
   color-scheme: dark; /* 让原生滚动条 / 表单控件跟着主题走 */

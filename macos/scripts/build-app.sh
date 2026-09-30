@@ -21,5 +21,11 @@ if [ -n "$version" ]; then
   plutil -replace CFBundleVersion -string "$version" "$app/Contents/Info.plist"
 fi
 
+# Freshly copied files can carry FinderInfo/provenance metadata that codesign
+# rejects as "resource fork, Finder information, or similar detritus".
+find "$app" -name .DS_Store -delete
+find "$app" -name '._*' -delete
+xattr -cr "$app"
+
 codesign --force --deep --sign - "$app"
 printf '%s\n' "$app"

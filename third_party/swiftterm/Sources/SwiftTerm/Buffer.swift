@@ -201,7 +201,6 @@ public final class Buffer {
         get { return _lines }
     }
 
-    private var curAttr: Attribute = Attribute.empty
     private var insertMode: Bool = false
     private var marginMode: Bool = false
     private var wraparound: Bool = false
@@ -1083,7 +1082,7 @@ public final class Buffer {
         }
         let bufferRow = _lines[_y+_yBase]
         var empty = CharData.Null
-        empty.attribute = curAttr
+        empty.attribute = charData.attribute
         // insert mode: move characters to right
         if insertMode {
             // right shift cells according to the width

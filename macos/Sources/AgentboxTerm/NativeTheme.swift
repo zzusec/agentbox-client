@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 
 enum NativeTheme {
     static let accent = dynamic(light: NSColor(calibratedRed: 0.059, green: 0.463, blue: 0.431, alpha: 1),
@@ -32,9 +33,36 @@ enum NativeTheme {
             .withSymbolConfiguration(config)
     }
 
+    /// Creates a terminal font with an explicit CJK fallback cascade list.
+    /// Without this, Menlo alone cannot render Chinese/Japanese/Korean characters,
+    /// which appear as white block tofu glyphs.
     static func terminalFont(size: CGFloat = 13) -> NSFont {
-        NSFont(name: "Menlo-Regular", size: size)
+        let baseFont = NSFont(name: "Menlo-Regular", size: size)
             ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+
+        // Build a cascade list of CJK-capable fonts so CoreText can find
+        // glyphs for characters not covered by Menlo.
+        let cascadeNames = [
+            "PingFang SC",        // Simplified Chinese (macOS built-in)
+            "PingFang TC",        // Traditional Chinese
+            "PingFang HK",        // Hong Kong Traditional Chinese
+            "Hiragino Sans",      // Japanese
+            "Apple SD Gothic Neo", // Korean
+            "Apple Color Emoji",  // Emoji
+        ]
+        var cascadeDescriptors: [CTFontDescriptor] = []
+        for name in cascadeNames {
+            let attrs = [kCTFontFamilyNameAttribute: name] as CFDictionary
+            cascadeDescriptors.append(CTFontDescriptorCreateWithAttributes(attrs))
+        }
+
+        let baseCT = baseFont as CTFont
+        let baseDesc = CTFontCopyFontDescriptor(baseCT)
+        let newAttrs = [kCTFontCascadeListAttribute: cascadeDescriptors] as CFDictionary
+        let newDesc = CTFontDescriptorCreateCopyWithAttributes(baseDesc, newAttrs)
+        let cascadedCT = CTFontCreateWithFontDescriptor(newDesc, size, nil)
+
+        return cascadedCT as NSFont
     }
 
     static func panel(radius: CGFloat = 12) -> NSView {

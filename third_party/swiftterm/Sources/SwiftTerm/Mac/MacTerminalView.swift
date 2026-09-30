@@ -52,9 +52,29 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
 
         public init(font baseFont: NSFont, fontSize: CGFloat? = nil) {
             self.normal = baseFont
-            self.bold = NSFontManager.shared.convert(baseFont, toHaveTrait: [.boldFontMask])
-            self.italic = NSFontManager.shared.convert(baseFont, toHaveTrait: [.italicFontMask])
-            self.boldItalic = NSFontManager.shared.convert(baseFont, toHaveTrait: [.italicFontMask, .boldFontMask])
+
+            // Preserve the cascade list from the base font descriptor when
+            // creating bold/italic variants.  NSFontManager.convert() can
+            // strip custom attributes like kCTFontCascadeListAttribute, so
+            // we re-attach them after conversion.
+            let baseCT = baseFont as CTFont
+            let baseDesc = CTFontCopyFontDescriptor(baseCT)
+            let cascadeRef = CTFontDescriptorCopyAttribute(baseDesc, kCTFontCascadeListAttribute)
+
+            func preserveCascade(_ font: NSFont) -> NSFont {
+                guard let cascade = cascadeRef else { return font }
+                let ct = font as CTFont
+                let desc = CTFontCopyFontDescriptor(ct)
+                let newDesc = CTFontDescriptorCreateCopyWithAttributes(
+                    desc,
+                    [kCTFontCascadeListAttribute: cascade] as CFDictionary
+                )
+                return CTFontCreateWithFontDescriptor(newDesc, font.pointSize, nil) as NSFont
+            }
+
+            self.bold = preserveCascade(NSFontManager.shared.convert(baseFont, toHaveTrait: [.boldFontMask]))
+            self.italic = preserveCascade(NSFontManager.shared.convert(baseFont, toHaveTrait: [.italicFontMask]))
+            self.boldItalic = preserveCascade(NSFontManager.shared.convert(baseFont, toHaveTrait: [.italicFontMask, .boldFontMask]))
         }
 
         // Expected by the shared rendering code

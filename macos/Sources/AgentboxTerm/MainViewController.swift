@@ -124,9 +124,13 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     }
 
     private func chooseLocalRoot() {
-        guard let workspace else { return }
-        syncManager?.stop()
-        syncManager = nil
+        if workspace == nil, let first = workspaces.first {
+            select(first)
+        }
+        guard let workspace else {
+            sidebar.setStatus("请先选择工作空间")
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -137,7 +141,23 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         if let current = UserDefaults.standard.string(forKey: localRootKey(workspace)) {
             panel.directoryURL = URL(fileURLWithPath: current, isDirectory: true)
         }
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let window = view.window else {
+            if panel.runModal() == .OK, let url = panel.url {
+                applyLocalRoot(url, for: workspace)
+            }
+            return
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            self?.applyLocalRoot(url, for: workspace)
+        }
+    }
+
+    private func applyLocalRoot(_ url: URL, for workspace: Workspace) {
+        syncManager?.stop()
+        syncManager = nil
         UserDefaults.standard.set(url.path, forKey: localRootKey(workspace))
         sidebar.setLocalRoot(url.path)
         let savedPolicy = UserDefaults.standard.string(forKey: initialPolicyKey(workspace))

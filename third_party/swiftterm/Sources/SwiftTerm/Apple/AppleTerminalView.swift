@@ -653,81 +653,181 @@ extension TerminalView {
             #endif
             let line = terminal.buffer.lines [row]
             let lineInfo = buildAttributedString(row: row, line: line, cols: terminal.cols)
-            let ctline = CTLineCreateWithAttributedString(lineInfo.attrStr)
-            var col = 0
-            for run in CTLineGetGlyphRuns(ctline) as? [CTRun] ?? [] {
-                let runGlyphsCount = CTRunGetGlyphCount(run)
-                let runAttributes = CTRunGetAttributes(run) as? [NSAttributedString.Key: Any] ?? [:]
-                let runFont = runAttributes[.font] as! TTFont
 
-                let runGlyphs = [CGGlyph](unsafeUninitializedCapacity: runGlyphsCount) { (bufferPointer, count) in
-                    CTRunGetGlyphs(run, CFRange(), bufferPointer.baseAddress!)
-                    count = runGlyphsCount
+            // Check whether this line contains any wide (CJK) characters.
+            // Wide characters need special handling because they span 2 columns
+            // but produce only 1 glyph, so the standard CTRun path — which
+            // maps glyphs 1:1 to columns — would misalign everything.
+            var hasWide = false
+            for c in 0..<terminal.cols {
+                if line[c].width > 1 {
+                    hasWide = true
+                    break
                 }
-                var positions = runGlyphs.enumerated().map { (i: Int, glyph: CGGlyph) -> CGPoint in
-                    CGPoint(x: lineOrigin.x + (cellDimension.width * CGFloat(col + i)), y: lineOrigin.y + yOffset)
-                }
+            }
 
-                var backgroundColor: TTColor?
-                if runAttributes.keys.contains(.selectionBackgroundColor) {
-                    backgroundColor = runAttributes[.selectionBackgroundColor] as? TTColor
-                } else if runAttributes.keys.contains(.backgroundColor) {
-                    backgroundColor = runAttributes[.backgroundColor] as? TTColor
-                }
-
-                if let backgroundColor = backgroundColor {
-                    context.saveGState ()
-
-                    context.setShouldAntialias (false)
-                    context.setLineCap (.square)
-                    context.setLineWidth(0)
-                    context.setFillColor(backgroundColor.cgColor)
-
-                    let transform = CGAffineTransform (translationX: positions[0].x, y: 0)
-
-                    var size = CGSize (width: CGFloat (cellDimension.width * CGFloat(runGlyphsCount)), height: cellDimension.height)
-                    var origin: CGPoint = lineOrigin
-
-                    #if (lastLineExtends)
-                    // Stretch last col/row to full frame size.
-                    // TODO: need apply this kind of fixup to selection too
-                    if (row-terminal.buffer.yDisp) >= terminal.rows - 1 {
-                        let missing = frame.height - (cellDimension.height + CGFloat(row) + 1)
-                        size.height += missing
-                        origin.y -= missing
-                    }
-                    #endif
-
-                    if col + runGlyphsCount >= terminal.cols {
-                        size.width += frame.width - size.width
-                    }
-
-                    let rect = CGRect (origin: origin, size: size)
-                    #if os(macOS)
-                    rect.applying(transform).fill(using: .destinationOver)
-                    #else
-                    context.fill(rect.applying(transform))
-                    #endif
+            if hasWide {
+                // ── Wide-character-aware cell-by-cell rendering ──────────
+                // First pass: draw backgrounds for every cell.
+                for c in 0..<terminal.cols {
+                    let cell = line[c]
+                    guard let attrs = getAttributes(cell.attribute, withUrl: cell.hasPayload),
+                          let bg = attrs[.backgroundColor] as? TTColor else { continue }
+                    let w = max(1, Int(cell.width))
+                    context.saveGState()
+                    context.setShouldAntialias(false)
+                    context.setFillColor(bg.cgColor)
+                    context.fill(CGRect(
+                        x: lineOrigin.x + cellDimension.width * CGFloat(c),
+                        y: lineOrigin.y,
+                        width: cellDimension.width * CGFloat(w),
+                        height: cellDimension.height))
                     context.restoreGState()
                 }
 
-                nativeForegroundColor.set()
-
-                if runAttributes.keys.contains(.foregroundColor) {
-                    let color = runAttributes[.foregroundColor] as! TTColor
-                    let cgColor = color.cgColor
-                    if let colorSpace = cgColor.colorSpace {
-                        context.setFillColorSpace(colorSpace)
+                // Selection highlight overlay (rendered on top of normal
+                // backgrounds so the selection color is visible).
+                if let sel = self.selection, sel.active {
+                    let resolvedLine = buildAttributedString(row: row, line: line, cols: terminal.cols)
+                    // Walk the attributed string to find selection ranges
+                    let fullRange = NSRange(location: 0, length: resolvedLine.attrStr.length)
+                    resolvedLine.attrStr.enumerateAttribute(
+                        .selectionBackgroundColor,
+                        in: fullRange,
+                        options: []
+                    ) { value, range, _ in
+                        guard let selColor = value as? TTColor else { return }
+                        context.saveGState()
+                        context.setShouldAntialias(false)
+                        context.setFillColor(selColor.cgColor)
+                        context.fill(CGRect(
+                            x: lineOrigin.x + cellDimension.width * CGFloat(range.location),
+                            y: lineOrigin.y,
+                            width: cellDimension.width * CGFloat(range.length),
+                            height: cellDimension.height))
+                        context.restoreGState()
                     }
-                    context.setFillColor(cgColor)
                 }
 
-                CTFontDrawGlyphs(runFont, runGlyphs, &positions, positions.count, context)
+                // Second pass: draw each visible character.
+                // Skip continuation cells (width == 0) and empty cells (code == 0).
+                for c in 0..<terminal.cols {
+                    let cell = line[c]
+                    guard cell.width > 0, cell.code != 0 else { continue }
+                    guard var attrs = getAttributes(cell.attribute, withUrl: cell.hasPayload) else { continue }
+                    attrs.removeValue(forKey: .backgroundColor)
 
-                // Draw other attributes
-                drawRunAttributes(runAttributes, glyphPositions: positions, in: context)
+                    // Core Text never draws underline decorations and AppKit
+                    // suppresses them for blank runs, so a per-cell draw loses
+                    // underlined spaces. Stroke them here instead, spanning
+                    // every column the character occupies (2 for wide chars).
+                    let underlineStyle = attrs[.underlineStyle]
+                    let underlineColor = attrs[.underlineColor]
+                    attrs.removeValue(forKey: .underlineStyle)
+                    attrs.removeValue(forKey: .underlineColor)
 
-                col += runGlyphsCount
+                    let text = String(cell.getCharacter())
+
+                    // Use NSAttributedString.draw(at:) which lets CoreText
+                    // perform proper font cascade (Menlo → PingFang SC etc.)
+                    // and renders each character with the correct fallback font.
+                    let attrStr = NSAttributedString(
+                        string: text,
+                        attributes: attrs)
+                    attrStr.draw(at: CGPoint(
+                        x: lineOrigin.x + cellDimension.width * CGFloat(c),
+                        y: lineOrigin.y))
+
+                    if underlineStyle != nil {
+                        let columns = max(1, Int(cell.width))
+                        let positions = (0..<columns).map { w in
+                            CGPoint(x: lineOrigin.x + cellDimension.width * CGFloat(c + w),
+                                    y: lineOrigin.y + yOffset)
+                        }
+                        drawRunAttributes(
+                            [.underlineStyle: underlineStyle!,
+                             .underlineColor: underlineColor ?? nativeForegroundColor],
+                            glyphPositions: positions, in: context)
+                    }
+                }
+            } else {
+                // ── Fast path for pure-ASCII / single-width lines ────────
+                let ctline = CTLineCreateWithAttributedString(lineInfo.attrStr)
+                var col = 0
+                for run in CTLineGetGlyphRuns(ctline) as? [CTRun] ?? [] {
+                    let runGlyphsCount = CTRunGetGlyphCount(run)
+                    let runAttributes = CTRunGetAttributes(run) as? [NSAttributedString.Key: Any] ?? [:]
+                    let runFont = runAttributes[.font] as! TTFont
+
+                    let runGlyphs = [CGGlyph](unsafeUninitializedCapacity: runGlyphsCount) { (bufferPointer, count) in
+                        CTRunGetGlyphs(run, CFRange(), bufferPointer.baseAddress!)
+                        count = runGlyphsCount
+                    }
+                    var positions = runGlyphs.enumerated().map { (i: Int, glyph: CGGlyph) -> CGPoint in
+                        CGPoint(x: lineOrigin.x + (cellDimension.width * CGFloat(col + i)), y: lineOrigin.y + yOffset)
+                    }
+
+                    var backgroundColor: TTColor?
+                    if runAttributes.keys.contains(.selectionBackgroundColor) {
+                        backgroundColor = runAttributes[.selectionBackgroundColor] as? TTColor
+                    } else if runAttributes.keys.contains(.backgroundColor) {
+                        backgroundColor = runAttributes[.backgroundColor] as? TTColor
+                    }
+
+                    if let backgroundColor = backgroundColor {
+                        context.saveGState ()
+
+                        context.setShouldAntialias (false)
+                        context.setLineCap (.square)
+                        context.setLineWidth(0)
+                        context.setFillColor(backgroundColor.cgColor)
+
+                        let transform = CGAffineTransform (translationX: positions[0].x, y: 0)
+
+                        var size = CGSize (width: CGFloat (cellDimension.width * CGFloat(runGlyphsCount)), height: cellDimension.height)
+                        var origin: CGPoint = lineOrigin
+
+                        #if (lastLineExtends)
+                        // Stretch last col/row to full frame size.
+                        // TODO: need apply this kind of fixup to selection too
+                        if (row-terminal.buffer.yDisp) >= terminal.rows - 1 {
+                            let missing = frame.height - (cellDimension.height + CGFloat(row) + 1)
+                            size.height += missing
+                            origin.y -= missing
+                        }
+                        #endif
+
+                        if col + runGlyphsCount >= terminal.cols {
+                            size.width += frame.width - size.width
+                        }
+
+                        let rect = CGRect (origin: origin, size: size)
+                        #if os(macOS)
+                        rect.applying(transform).fill(using: .destinationOver)
+                        #else
+                        context.fill(rect.applying(transform))
+                        #endif
+                        context.restoreGState()
+                    }
+
+                    nativeForegroundColor.set()
+
+                    if runAttributes.keys.contains(.foregroundColor) {
+                        let color = runAttributes[.foregroundColor] as! TTColor
+                        let cgColor = color.cgColor
+                        if let colorSpace = cgColor.colorSpace {
+                            context.setFillColorSpace(colorSpace)
+                        }
+                        context.setFillColor(cgColor)
+                    }
+
+                    CTFontDrawGlyphs(runFont, runGlyphs, &positions, positions.count, context)
+
+                    // Draw other attributes
+                    drawRunAttributes(runAttributes, glyphPositions: positions, in: context)
+
+                    col += runGlyphsCount
+                }
             }
 
             // Render any sixel content last

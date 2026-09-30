@@ -12,7 +12,7 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     private let emptyState = NSStackView()
     private let projectCount = NSTextField(labelWithString: "0")
     private let localRoot = NSTextField(labelWithString: "尚未选择")
-    private let chooseRootButton = NSButton(title: "选择目录", target: nil, action: nil)
+    private let chooseRootButton = FirstMouseButton(title: "选择目录", target: nil, action: nil)
     private let status = NSTextField(labelWithString: "正在连接…")
     private var workspaces: [Workspace] = []
     private var projects: [RemoteProject] = []
@@ -309,6 +309,12 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
         button.font = .systemFont(ofSize: 12, weight: .medium)
         return button
     }
+}
+
+/// 侧栏按钮在窗口未激活时也要响应第一次点击：否则 macOS 会吞掉这一击去激活窗口，
+/// 用户只会看到「点了没反应」。
+private final class FirstMouseButton: NSButton {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 private final class ProjectCellView: NSTableCellView {
