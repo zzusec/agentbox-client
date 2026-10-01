@@ -78,7 +78,96 @@ struct AppSmokeChecks {
     }
 
     @MainActor
+    static func themeChecks() {
+        let defaults = UserDefaults.standard
+        let customKey = "agentbox.terminal.custom-scheme"
+        let schemeKey = "agentbox.terminal.scheme"
+        let familyKey = "agentbox.terminal.font-family"
+        let mouseKey = "agentbox.terminal.mouse-mode"
+        let priorCustom = defaults.string(forKey: customKey)
+        let priorScheme = defaults.string(forKey: schemeKey)
+        let priorFamily = defaults.string(forKey: familyKey)
+        let priorMouse = defaults.string(forKey: mouseKey)
+        defer {
+            if let priorCustom {
+                defaults.set(priorCustom, forKey: customKey)
+            } else {
+                defaults.removeObject(forKey: customKey)
+            }
+            if let priorScheme {
+                defaults.set(priorScheme, forKey: schemeKey)
+            } else {
+                defaults.removeObject(forKey: schemeKey)
+            }
+            if let priorFamily {
+                defaults.set(priorFamily, forKey: familyKey)
+            } else {
+                defaults.removeObject(forKey: familyKey)
+            }
+            if let priorMouse {
+                defaults.set(priorMouse, forKey: mouseKey)
+            } else {
+                defaults.removeObject(forKey: mouseKey)
+            }
+        }
+
+        // Hex normalization: 3/6 digits with optional '#', everything else nil.
+        precondition(TerminalThemeManager.normalizedHex("#0C0C0C") == "#0C0C0C")
+        precondition(TerminalThemeManager.normalizedHex("0c0c0c") == "#0C0C0C")
+        precondition(TerminalThemeManager.normalizedHex("#aBc") == "#AABBCC")
+        precondition(TerminalThemeManager.normalizedHex("abc") == "#AABBCC")
+        precondition(TerminalThemeManager.normalizedHex("#ab") == nil)
+        precondition(TerminalThemeManager.normalizedHex("#abcd") == nil)
+        precondition(TerminalThemeManager.normalizedHex("#zzzzzz") == nil)
+        precondition(TerminalThemeManager.normalizedHex("#12345") == nil)
+        precondition(TerminalThemeManager.normalizedHex("") == nil)
+
+        // Custom scheme: create from preset, round-trip through defaults,
+        // mutate, and select.
+        defaults.removeObject(forKey: customKey)
+        defaults.set(TerminalThemeManager.schemes[0].id, forKey: schemeKey)
+        // Placeholder card must carry the fixed custom id, never the preset's
+        // (a duplicate id would double-match selection in the card grid).
+        precondition(TerminalThemeManager.choices.last?.id == TerminalThemeManager.customSchemeID)
+        let source = TerminalThemeManager.schemes[2]
+        TerminalThemeManager.createCustom(from: source)
+        precondition(defaults.string(forKey: schemeKey) == TerminalThemeManager.customSchemeID)
+        var stored = TerminalThemeManager.customScheme
+        precondition(stored?.id == TerminalThemeManager.customSchemeID)
+        precondition(stored?.background == source.background)
+        precondition(stored?.ansi.count == 16)
+        precondition(TerminalThemeManager.current.id == TerminalThemeManager.customSchemeID)
+        precondition(TerminalThemeManager.choices.last?.id == TerminalThemeManager.customSchemeID)
+        TerminalThemeManager.updateCustom { $0 = $0.with(background: "#112233") }
+        stored = TerminalThemeManager.customScheme
+        precondition(stored?.background == "#112233")
+        precondition(TerminalThemeManager.isLight(hex: "#FFFFFF"))
+        precondition(!TerminalThemeManager.isLight(hex: "#000000"))
+
+        // Font family: unknown ids fall back to the first installed family.
+        precondition(TerminalThemeManager.installedFontFamilies.contains { $0.id == "menlo" })
+        defaults.set("not-a-font", forKey: familyKey)
+        precondition(TerminalThemeManager.fontFamily.id == "menlo")
+        precondition(TerminalThemeManager.font().familyName != nil)
+        defaults.set("monaco", forKey: familyKey)
+        precondition(TerminalThemeManager.fontFamily.id == "monaco")
+
+        // Mouse mode: default off, three states persist, surface applies live.
+        precondition(TerminalThemeManager.mouseMode == .off)
+        TerminalThemeManager.update(mouseMode: .smart)
+        precondition(TerminalThemeManager.mouseMode == .smart)
+        TerminalThemeManager.update(mouseMode: .on)
+        precondition(TerminalThemeManager.mouseMode == .on)
+        let surface = TerminalSurface(frame: NSRect(x: 0, y: 0, width: 400, height: 300), font: nil)
+        precondition(surface.allowMouseReporting, "on mode must report mouse")
+        TerminalThemeManager.update(mouseMode: .off)
+        surface.applyMouseMode()
+        precondition(!surface.allowMouseReporting, "off mode must select locally")
+    }
+
+    @MainActor
     static func check() async throws {
+        themeChecks()
         precondition(URLProtocol.registerClass(AppHTTPFixture.self))
         let client = AgentboxClient(server: URL(string: "https://agentbox-app-fixture.invalid")!, user: "synthetic-app-user", token: "synthetic-app-token")
         let controller = MainViewController(client: client)
@@ -146,7 +235,7 @@ struct AppSmokeChecks {
             controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
-        print("PASS: native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle and directory cancellation")
+        print("PASS: theme/scheme/font/mouse settings, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle and directory cancellation")
         if ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_KEEP_OPEN"] == "1" {
             try await Task.sleep(nanoseconds: 120_000_000_000)
         }

@@ -3,7 +3,8 @@ import SwiftTerm
 
 /// One terminal color scheme: the surface background/foreground, the cursor
 /// color and the 16 ANSI colors. Modeled after CLI-Manager's preset cards.
-struct TerminalScheme: Identifiable {
+/// Codable so the user-defined scheme persists as JSON in defaults.
+struct TerminalScheme: Identifiable, Codable {
     let id: String
     let name: String
     let detail: String
@@ -15,12 +16,64 @@ struct TerminalScheme: Identifiable {
     var isLight: Bool {
         TerminalThemeManager.isLight(hex: background)
     }
+
+    func with(
+        id newID: String? = nil,
+        name newName: String? = nil,
+        detail newDetail: String? = nil,
+        background newBackground: String? = nil,
+        foreground newForeground: String? = nil,
+        cursor newCursor: String? = nil,
+        ansi newAnsi: [String]? = nil
+    ) -> TerminalScheme {
+        TerminalScheme(
+            id: newID ?? id, name: newName ?? name, detail: newDetail ?? detail,
+            background: newBackground ?? background, foreground: newForeground ?? foreground,
+            cursor: newCursor ?? cursor, ansi: newAnsi ?? ansi
+        )
+    }
+}
+
+/// A monospaced font family offered in the terminal settings. `candidates`
+/// are font names tried in order (family and PostScript names), first resolvable
+/// one wins; families absent from this Mac are hidden from the picker.
+struct TerminalFontFamily: Identifiable {
+    let id: String
+    let displayName: String
+    let candidates: [String]
+
+    var resolvedName: String? {
+        candidates.first { NSFont(name: $0, size: 13) != nil }
+    }
+}
+
+/// How mouse events are handed to the TUI application:
+/// - off: never report; drag always selects locally (copy works, default).
+/// - on: always report when the app asked for mouse (vim/tmux clicks work).
+/// - smart: report like `on`, but holding ⇧ makes the gesture select locally.
+enum TerminalMouseMode: String {
+    case off, on, smart
+
+    var label: String {
+        switch self {
+        case .off: return "关闭"
+        case .on: return "开启"
+        case .smart: return "⇧ 拖选"
+        }
+    }
 }
 
 enum TerminalThemeManager {
+    /// Posted after any terminal setting changed (scheme, custom scheme,
+    /// font family, font size, mouse mode) so open terminals re-apply live.
     static let schemeChanged = Notification.Name("agentbox.terminal.scheme-changed")
     private static let schemeKey = "agentbox.terminal.scheme"
     private static let fontSizeKey = "agentbox.terminal.font-size"
+    private static let fontFamilyKey = "agentbox.terminal.font-family"
+    private static let mouseModeKey = "agentbox.terminal.mouse-mode"
+    private static let customSchemeKey = "agentbox.terminal.custom-scheme"
+
+    static let customSchemeID = "custom"
 
     static let schemes: [TerminalScheme] = [
         TerminalScheme(
@@ -61,9 +114,107 @@ enum TerminalThemeManager {
         ),
     ]
 
+    /// ANSI slot names (0–15) used as tooltips in the custom scheme editor.
+    static let ansiSlotNames = [
+        "黑", "红", "绿", "黄", "蓝", "品红", "青", "白",
+        "亮黑", "亮红", "亮绿", "亮黄", "亮蓝", "亮品红", "亮青", "亮白",
+    ]
+
+    // MARK: Scheme selection
+
+    /// Preset schemes plus the custom card. When no custom scheme has been
+    /// created yet, a placeholder derived from the current preset fills the
+    /// card so the grid always shows the "自定义" entry (fixed "custom" id —
+    /// never the preset's id, or the grid would hold the id twice).
+    static var choices: [TerminalScheme] {
+        let custom = customScheme
+        let placeholder = custom ?? current.with(
+            id: customSchemeID,
+            name: "自定义",
+            detail: "点击基于当前配色创建专属配色"
+        )
+        return schemes + [placeholder]
+    }
+
     static var current: TerminalScheme {
         let id = UserDefaults.standard.string(forKey: schemeKey)
+        if id == customSchemeID, let custom = customScheme {
+            return custom
+        }
         return schemes.first { $0.id == id } ?? schemes[0]
+    }
+
+    static func select(_ id: String) {
+        UserDefaults.standard.set(id, forKey: schemeKey)
+        NotificationCenter.default.post(name: schemeChanged, object: nil)
+    }
+
+    // MARK: Custom scheme
+
+    static var customScheme: TerminalScheme? {
+        guard let json = UserDefaults.standard.string(forKey: customSchemeKey) else { return nil }
+        let data = Data(json.utf8)
+        let scheme = try? JSONDecoder().decode(TerminalScheme.self, from: data)
+        return scheme?.with(name: "自定义", detail: "专属配色，随时修改")
+    }
+
+    /// Creates the custom scheme from an existing one and selects it.
+    static func createCustom(from source: TerminalScheme) {
+        let custom = source.with(id: customSchemeID, name: "自定义", detail: "专属配色，随时修改")
+        storeCustom(custom)
+        select(customSchemeID)
+    }
+
+    /// Mutates the stored custom scheme in place and notifies observers.
+    static func updateCustom(_ mutate: (inout TerminalScheme) -> Void) {
+        guard var custom = customScheme else { return }
+        mutate(&custom)
+        storeCustom(custom)
+        if UserDefaults.standard.string(forKey: schemeKey) == customSchemeID {
+            NotificationCenter.default.post(name: schemeChanged, object: nil)
+        }
+    }
+
+    private static func storeCustom(_ scheme: TerminalScheme) {
+        guard let data = try? JSONEncoder().encode(scheme),
+              let json = String(data: data, encoding: .utf8) else { return }
+        UserDefaults.standard.set(json, forKey: customSchemeKey)
+    }
+
+    // MARK: Font
+
+    static let fontFamilies: [TerminalFontFamily] = [
+        TerminalFontFamily(id: "menlo", displayName: "Menlo（默认）", candidates: ["Menlo-Regular", "Menlo"]),
+        TerminalFontFamily(id: "sf-mono", displayName: "SF Mono", candidates: ["SFNSMono-Regular", "SF Mono", "SFNSMono"]),
+        TerminalFontFamily(id: "monaco", displayName: "Monaco", candidates: ["Monaco"]),
+        TerminalFontFamily(id: "courier-new", displayName: "Courier New", candidates: ["Courier New", "CourierNewPSMT"]),
+        TerminalFontFamily(id: "andale-mono", displayName: "Andale Mono", candidates: ["Andale Mono"]),
+        TerminalFontFamily(id: "jetbrains-mono", displayName: "JetBrains Mono", candidates: ["JetBrains Mono", "JetBrainsMono-Regular"]),
+        TerminalFontFamily(id: "fira-code", displayName: "Fira Code", candidates: ["Fira Code", "FiraCode-Regular"]),
+        TerminalFontFamily(id: "fira-mono", displayName: "Fira Mono", candidates: ["Fira Mono", "FiraMono-Regular"]),
+        TerminalFontFamily(id: "hack", displayName: "Hack", candidates: ["Hack", "Hack-Regular"]),
+        TerminalFontFamily(id: "source-code-pro", displayName: "Source Code Pro", candidates: ["Source Code Pro", "SourceCodePro-Regular"]),
+        TerminalFontFamily(id: "ibm-plex-mono", displayName: "IBM Plex Mono", candidates: ["IBM Plex Mono", "IBMPlexMono-Regular"]),
+        TerminalFontFamily(id: "cascadia-code", displayName: "Cascadia Code", candidates: ["Cascadia Code", "CascadiaCode-Regular"]),
+        TerminalFontFamily(id: "victor-mono", displayName: "Victor Mono", candidates: ["Victor Mono", "VictorMono-Regular"]),
+        TerminalFontFamily(id: "iosevka", displayName: "Iosevka", candidates: ["Iosevka", "Iosevka-Regular"]),
+        TerminalFontFamily(id: "roboto-mono", displayName: "Roboto Mono", candidates: ["Roboto Mono", "RobotoMono-Regular"]),
+        TerminalFontFamily(id: "inconsolata", displayName: "Inconsolata", candidates: ["Inconsolata", "Inconsolata-Regular"]),
+        TerminalFontFamily(id: "ubuntu-mono", displayName: "Ubuntu Mono", candidates: ["Ubuntu Mono", "UbuntuMono-Regular"]),
+    ]
+
+    /// Families actually present on this machine, in the curated order.
+    static var installedFontFamilies: [TerminalFontFamily] {
+        fontFamilies.filter { $0.resolvedName != nil }
+    }
+
+    static var fontFamilyID: String {
+        UserDefaults.standard.string(forKey: fontFamilyKey) ?? "menlo"
+    }
+
+    static var fontFamily: TerminalFontFamily {
+        let id = fontFamilyID
+        return installedFontFamilies.first { $0.id == id } ?? installedFontFamilies[0]
     }
 
     static var fontSize: CGFloat {
@@ -71,8 +222,8 @@ enum TerminalThemeManager {
         return stored > 0 ? CGFloat(stored) : 13
     }
 
-    static func select(_ id: String) {
-        UserDefaults.standard.set(id, forKey: schemeKey)
+    static func selectFontFamily(_ id: String) {
+        UserDefaults.standard.set(id, forKey: fontFamilyKey)
         NotificationCenter.default.post(name: schemeChanged, object: nil)
     }
 
@@ -81,13 +232,26 @@ enum TerminalThemeManager {
         NotificationCenter.default.post(name: schemeChanged, object: nil)
     }
 
+    /// The terminal font: the chosen family with the CJK fallback cascade.
     static func font() -> NSFont {
-        NativeTheme.terminalFont(size: fontSize)
+        NativeTheme.terminalFont(size: fontSize, postScriptName: fontFamily.resolvedName)
     }
 
+    // MARK: Mouse reporting
+
+    static var mouseMode: TerminalMouseMode {
+        TerminalMouseMode(rawValue: UserDefaults.standard.string(forKey: mouseModeKey) ?? "") ?? .off
+    }
+
+    static func update(mouseMode: TerminalMouseMode) {
+        UserDefaults.standard.set(mouseMode.rawValue, forKey: mouseModeKey)
+        NotificationCenter.default.post(name: schemeChanged, object: nil)
+    }
+
+    // MARK: Color helpers
+
     static func nsColor(_ hex: String) -> NSColor {
-        var value: UInt64 = 0
-        Scanner(string: String(hex.dropFirst())).scanHexInt64(&value)
+        let value = hexValue(hex)
         return NSColor(
             calibratedRed: CGFloat((value & 0xFF0000) >> 16) / 255,
             green: CGFloat((value & 0x00FF00) >> 8) / 255,
@@ -97,17 +261,38 @@ enum TerminalThemeManager {
     }
 
     static func termColor(_ hex: String) -> SwiftTerm.Color {
+        let value = hexValue(hex)
+        return SwiftTerm.Color(
+            red: UInt16((value & 0xFF0000) >> 16) * 257,
+            green: UInt16((value & 0x00FF00) >> 8) * 257,
+            blue: UInt16(value & 0x0000FF) * 257
+        )
+    }
+
+    /// Normalizes free-form input to `#RRGGBB`: accepts an optional `#` and
+    /// 3- or 6-digit hex. Returns nil for anything else — callers must treat
+    /// nil as "keep the previous color", not as black.
+    static func normalizedHex(_ raw: String) -> String? {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("#") {
+            text.removeFirst()
+        }
+        guard text.count == 3 || text.count == 6 else { return nil }
+        if text.count == 3 {
+            text = text.map { "\($0)\($0)" }.joined()
+        }
+        guard text.allSatisfy({ $0.isHexDigit }) else { return nil }
+        return "#" + text.uppercased()
+    }
+
+    private static func hexValue(_ hex: String) -> UInt64 {
         var value: UInt64 = 0
         Scanner(string: String(hex.dropFirst())).scanHexInt64(&value)
-        let red = UInt16((value & 0xFF0000) >> 16)
-        let green = UInt16((value & 0x00FF00) >> 8)
-        let blue = UInt16(value & 0x0000FF)
-        return SwiftTerm.Color(red: red * 257, green: green * 257, blue: blue * 257)
+        return value
     }
 
     static func isLight(hex: String) -> Bool {
-        var value: UInt64 = 0
-        Scanner(string: String(hex.dropFirst())).scanHexInt64(&value)
+        let value = hexValue(hex)
         let red = (value & 0xFF0000) >> 16
         let green = (value & 0x00FF00) >> 8
         let blue = value & 0x0000FF

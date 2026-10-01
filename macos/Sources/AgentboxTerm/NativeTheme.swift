@@ -36,8 +36,11 @@ enum NativeTheme {
     /// Creates a terminal font with an explicit CJK fallback cascade list.
     /// Without this, Menlo alone cannot render Chinese/Japanese/Korean characters,
     /// which appear as white block tofu glyphs.
-    static func terminalFont(size: CGFloat = 13) -> NSFont {
-        let baseFont = NSFont(name: "Menlo-Regular", size: size)
+    /// `postScriptName` picks the base family (settings picker); any family
+    /// that fails to resolve falls back to Menlo, then the system monospaced.
+    static func terminalFont(size: CGFloat = 13, postScriptName: String? = nil) -> NSFont {
+        let baseFont = postScriptName.flatMap { NSFont(name: $0, size: size) }
+            ?? NSFont(name: "Menlo-Regular", size: size)
             ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
 
         // Build a cascade list of CJK-capable fonts so CoreText can find

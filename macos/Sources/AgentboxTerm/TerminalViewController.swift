@@ -80,6 +80,7 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         if surface.font != TerminalThemeManager.font() {
             surface.font = TerminalThemeManager.font()
         }
+        surface.applyMouseMode()
         refitPTY()
     }
 

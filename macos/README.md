@@ -35,6 +35,20 @@ does not fetch GitHub dependencies.
 The local root maps directly to the remote `/workspace`: remote project
 `/workspace/demo` maps to `<local root>/demo`.
 
+## Terminal settings
+
+The palette toolbar button opens the terminal settings sheet:
+
+- Color schemes: six presets plus a custom scheme. The custom card seeds from
+  the current preset and exposes background/foreground/cursor color wells and
+  hex fields for all 16 ANSI slots; every change applies to open terminals live.
+- Font family and size: the family picker lists monospaced fonts installed on
+  this machine (Menlo by default); CJK glyphs fall back to PingFang and friends
+  regardless of the family.
+- Mouse reporting has three modes: off (default; drag selects and copies),
+  on (mouse events reach TUI apps like vim/tmux), and smart (reports like on,
+  but holding ⇧ while dragging selects locally).
+
 ## Development
 
 ```bash
