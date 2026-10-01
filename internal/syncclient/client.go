@@ -227,8 +227,17 @@ func (c *Client) request(
 	method, route string,
 	body io.Reader,
 ) (*http.Request, error) {
+	// Routes carry their query inline ("…/file?path=x"). Assigning that
+	// straight to URL.Path escapes the '?' and sends the query as part of the
+	// path, so the server's "/file" pattern never matched and every file
+	// read, write and delete came back 404. Split it properly.
+	rel, err := url.Parse(route)
+	if err != nil {
+		return nil, err
+	}
 	target := *c.Server
-	target.Path = strings.TrimRight(target.Path, "/") + route
+	target.Path = strings.TrimRight(target.Path, "/") + rel.Path
+	target.RawQuery = rel.RawQuery
 	req, err := http.NewRequestWithContext(ctx, method, target.String(), body)
 	if err != nil {
 		return nil, err

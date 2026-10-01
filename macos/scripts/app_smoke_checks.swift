@@ -439,7 +439,7 @@ struct AppSmokeChecks {
     /// by project ID, the new-project sheet exposes all three fields, and the
     /// sidebar's right-click menu reaches the same two actions.
     @MainActor
-    static func projectSettingsChecks() {
+    static func projectSettingsChecks() async throws {
         let suite = "agentbox.smoke.project-sync"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
@@ -597,27 +597,47 @@ struct AppSmokeChecks {
             try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
         precondition(NSApp.sendAction(renameItem.action!, to: renameItem.target, from: renameItem))
-        precondition(renamed?.id == "p1")
+        try await drainMainQueue()
+        precondition(renamed?.id == "p1", "a deferred menu action must still land")
         let dirItem = menu.items.first { $0.title == "修改本地工作空间…" }!
         precondition(NSApp.sendAction(dirItem.action!, to: dirItem.target, from: dirItem))
+        try await drainMainQueue()
         precondition(changedDir?.id == "p1")
 
         // Tapping the row only picks the side...
         rows[2].select()
+        // ...and it must be handed over *after* the menu closes: modal UI
+        // started inside a live tracking loop comes up behind the open menu
+        // and never sees the clicks meant for it.
+        precondition(changedPolicy == nil, "the row must not run its action inside menu tracking")
+        try await drainMainQueue()
         let picked = changedPolicy
         precondition(picked != nil && picked!.project.id == "p1" && picked!.policy == "local")
         precondition(syncedNow == nil, "picking a side must not sync on its own")
         // ...while the ⟳ reports an immediate overwrite for that side.
         rows[1].performSyncNow()
+        precondition(syncedNow == nil, "the ⟳ must not run inside menu tracking either")
+        try await drainMainQueue()
         let forced = syncedNow
         precondition(forced != nil && forced!.project.id == "p1" && forced!.policy == "server")
+    }
+
+    /// Lets queued main-queue work run so a deferred menu action lands.
+    ///
+    /// This has to suspend, not spin: the check itself is already running on
+    /// the main queue, which is serial, so no other block can start until this
+    /// one returns. `Task.sleep` returns control to the queue; a nested
+    /// `RunLoop.run` would just sit there and never see the block.
+    @MainActor
+    static func drainMainQueue() async {
+        try? await Task.sleep(nanoseconds: 60_000_000)
     }
 
     @MainActor
     static func check() async throws {
         themeChecks()
         settingsSheetChecks()
-        projectSettingsChecks()
+        try await projectSettingsChecks()
         try await mouseEventsChecks()
         precondition(URLProtocol.registerClass(AppHTTPFixture.self))
         let client = AgentboxClient(server: URL(string: "https://agentbox-app-fixture.invalid")!, user: "synthetic-app-user", token: "synthetic-app-token")

@@ -48,17 +48,27 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
 
     @objc private func renameClicked() {
         guard let menuProject else { return }
-        onRenameProject?(menuProject)
+        afterMenuCloses { [weak self] in self?.onRenameProject?(menuProject) }
     }
 
     @objc private func changeLocalDirClicked() {
         guard let menuProject else { return }
-        onChangeProjectLocalDir?(menuProject)
+        afterMenuCloses { [weak self] in self?.onChangeProjectLocalDir?(menuProject) }
     }
 
     @objc private func deleteClicked() {
         guard let menuProject else { return }
-        onDeleteProject?(menuProject)
+        afterMenuCloses { [weak self] in self?.onDeleteProject?(menuProject) }
+    }
+
+    /// Runs a project-menu action once the menu has closed.
+    ///
+    /// A menu's tracking loop is still on the stack while an item is being
+    /// chosen. Modal UI started inside it — an alert, an open panel — comes up
+    /// with the menu still open behind it and never receives the clicks meant
+    /// for it, which looks exactly like "I clicked and nothing happened".
+    private func afterMenuCloses(_ action: @escaping () -> Void) {
+        DispatchQueue.main.async(execute: action)
     }
 
     override func loadView() {
@@ -611,13 +621,21 @@ final class SyncPolicyMenuRow: NSView {
 
     /// Exposed so the smoke checks can exercise both targets without a real
     /// click; the menu only ever runs these under a live right-click.
+    ///
+    /// Both close the menu *before* handing control on, and defer the action
+    /// to the next run-loop turn. The menu's tracking loop is still on the
+    /// stack while an item is being chosen, and anything modal started inside
+    /// it — an alert, a panel — comes up with the menu still open behind it
+    /// and never sees the clicks meant for it.
     func select() {
-        onSelect()
+        let action = onSelect
         enclosingMenuItem?.menu?.cancelTracking()
+        DispatchQueue.main.async { action() }
     }
 
     func performSyncNow() {
-        onSyncNow?()
+        let action = onSyncNow
         enclosingMenuItem?.menu?.cancelTracking()
+        DispatchQueue.main.async { action?() }
     }
 }
