@@ -84,6 +84,14 @@ final class TerminalGridViewController: NSViewController {
         return terminal
     }
 
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        // Window resize / sidebar toggle: keep the PTY width in lockstep with
+        // the visible width, or SwiftTerm leaves the uncovered strip with
+        // stale cells (bottom rows appearing at the right edge).
+        selected?.refitPTY()
+    }
+
     /// Bring an already-open terminal to the front.
     func select(_ terminal: TerminalViewController) {
         guard terminals.contains(where: { $0 === terminal }) else { return }

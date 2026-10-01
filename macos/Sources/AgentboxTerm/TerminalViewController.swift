@@ -19,6 +19,8 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
     var isActive = false
 
     private(set) var connectionState: TerminalConnectionState = .connecting
+    private var lastSentCols = 0
+    private var lastSentRows = 0
 
     private let client: AgentboxClient
     private let surface: TerminalSurface
@@ -86,6 +88,9 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
     func refitPTY() {
         view.layoutSubtreeIfNeeded()
         let terminal = surface.getTerminal()
+        guard terminal.cols != lastSentCols || terminal.rows != lastSentRows else { return }
+        lastSentCols = terminal.cols
+        lastSentRows = terminal.rows
         bridge?.resize(cols: terminal.cols, rows: terminal.rows)
     }
 
