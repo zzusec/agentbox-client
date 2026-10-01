@@ -343,27 +343,29 @@ func (s *Server) networkLoop() {
 }
 
 // bridgeWorkspace authenticates the source workspace independently of the
-// account credential, since an account can be shared by multiple users.
+// account credential, since an account can be shared by multiple instances.
+// The bridge identity is the instance id (see proxyEnvList), so the
+// Proxy-Authorization user must match sess.ID, and the TCP source must be one
+// of that instance's own container IPs — never a caller-supplied claim.
 func (s *Server) bridgeWorkspace(r *http.Request) (store.Session, bool) {
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil || s.dock == nil {
 		return store.Session{}, false
 	}
-	account, _, _ := parseProxyAuth(r.Header.Get("Proxy-Authorization"))
+	instance, _, _ := parseProxyAuth(r.Header.Get("Proxy-Authorization"))
 	var found store.Session
 	for _, sess := range s.store.All() {
-		if sess.AccountID != account || sess.Status != store.StatusRunning {
+		if sess.ID != instance || sess.Status != store.StatusRunning {
 			continue
 		}
-
-		// Resolve actual Docker ownership, never trusting a caller-supplied user.
 		for _, ownIP := range s.dock.ContainerIPs(r.Context(), sess.ContainerID) {
 			if ownIP == ip {
-				if found.ID != "" {
-					return store.Session{}, false
-				}
 				found = sess
+				break
 			}
+		}
+		if found.ID != "" {
+			break
 		}
 	}
 	if found.ID == "" {
@@ -378,7 +380,13 @@ func (s *Server) bridgeIntranet(r *http.Request, target string) (net.Conn, bool,
 	}
 	sess, ok := s.bridgeWorkspace(r)
 	if !ok {
-		return nil, true, fmt.Errorf("cannot authenticate workspace source")
+		// The TCP source could not be attributed to the authenticated
+		// instance's own container. Fail closed for the intranet — without
+		// attribution there is no policy to consult, so nothing may be
+		// tunneled — but do not fail the request: the caller already passed
+		// bridgeAuth, and public targets must keep flowing through the
+		// instance's own residential proxy.
+		return nil, false, nil
 	}
 	p, err := s.networkPolicy(sess.User)
 	if err != nil {
