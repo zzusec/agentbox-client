@@ -56,9 +56,10 @@ swift build
 ../macos/scripts/build-app.sh
 ```
 
-The sync process currently polls every five seconds. The server owns project
-IDs and sync leases; each project has one writable device at a time, while
-other devices continue to receive server changes.
+The sync process polls once a second (`interval_seconds: 1` in the sync
+config). The server owns project IDs and sync leases; each project has one
+writable device at a time, while other devices continue to receive server
+changes.
 
 ## Updates
 

@@ -67,7 +67,9 @@ final class CustomSchemeEditorView: NSView, NSTextFieldDelegate {
         ansiLabel.font = .systemFont(ofSize: 11, weight: .medium)
         ansiLabel.textColor = NativeTheme.secondaryText
 
-        let ansiGrid = NSGridView(numberOfColumns: 8, rows: 0)
+        // 4 columns × 4 rows: 8 columns would need ~780pt and overflow the
+        // 660pt sheet (the scroll view clips instead of scrolling sideways).
+        let ansiGrid = NSGridView(numberOfColumns: 4, rows: 0)
         ansiGrid.rowSpacing = 5
         ansiGrid.columnSpacing = 6
         var row: [NSView] = []
@@ -92,7 +94,7 @@ final class CustomSchemeEditorView: NSView, NSTextFieldDelegate {
             row.append(cell)
             ansiFields.append(field)
             ansiSwatches.append(swatch)
-            if row.count == 8 {
+            if row.count == 4 {
                 ansiGrid.addRow(with: row)
                 row = []
             }
@@ -116,9 +118,12 @@ final class CustomSchemeEditorView: NSView, NSTextFieldDelegate {
         presetHint.font = .systemFont(ofSize: 10)
         presetHint.textColor = NativeTheme.secondaryText
 
+        let topRow = NSStackView(views: topViews)
+        topRow.orientation = .horizontal
+        topRow.spacing = 14
+
         let content = NSStackView(views: [
-            topViews[0], topViews[1], topViews[2],
-            ansiLabel, ansiGrid,
+            topRow, ansiLabel, ansiGrid,
             presetLabel, popup, presetHint,
         ])
         content.orientation = .vertical

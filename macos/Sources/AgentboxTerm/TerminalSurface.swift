@@ -60,8 +60,9 @@ final class TerminalSurface: TerminalView {
             self.allowMouseReporting = !suppress
             if event.type == .leftMouseUp, suppress {
                 // The up event was dispatched with reporting off (no stray
-                // release reaches the app); restore for the next gesture.
-                DispatchQueue.main.async { self.allowMouseReporting = true }
+                // release reaches the app); re-read the mode instead of
+                // hardcoding true, in case it changed mid-gesture.
+                DispatchQueue.main.async { self.applyMouseMode() }
                 self.mouseGestureBypassed = false
             }
             return event
