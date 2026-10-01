@@ -128,17 +128,22 @@ and currently points to `zzusec/agentbox-client`.
 Create a release artifact with:
 
 ```bash
-macos/scripts/release-app.sh 0.2.1
+macos/scripts/release-app.sh 0.2.8
 ```
 
 This produces:
 
 ```text
-macos/dist/agentbox-client-macos-arm64-v0.2.2.zip
-macos/dist/agentbox-client-macos-arm64-v0.2.2.zip.sha256
+macos/dist/agentbox-client-macos-arm64-v0.2.8.zip
+macos/dist/agentbox-client-macos-arm64-v0.2.8.zip.sha256
+macos/dist/agentbox-client-macos-arm64-v0.2.8.dmg
+macos/dist/agentbox-client-macos-arm64-v0.2.8.dmg.sha256
 ```
 
-The GitHub release tag must be `v0.2.1` and the ZIP asset name must remain
+The DMG includes an Applications shortcut for drag-to-install. The app is
+ad-hoc signed, not Developer ID signed or notarized.
+
+The GitHub release tag must be `v0.2.8` and the ZIP asset name must remain
 stable. Do not publish an update without the checksum file; the client refuses
 archives whose SHA-256 cannot be verified.
 

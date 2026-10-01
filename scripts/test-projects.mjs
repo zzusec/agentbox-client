@@ -51,8 +51,9 @@ export async function smoke(page) {
   // 之后给有效窗口；磁盘第一帧标 stale，验证「统计中」不会被当成 0。
   // 网络计数器逐帧增长；netRestart 置位后的那一帧把计数器打回去，模拟容器重启。
   let statsReads = 0;
+  let failStats = false;
   let netRx = 4 * 1024 * 1024, netTx = 1024 * 1024, netRestart = false;
-  const statsItems = () => sessions.map(session => ({
+  const statsItems = now => sessions.map(session => ({
     session_id: session.id, name: session.name, agent: session.agent,
     running: session.status === 'running', proxy_bound: !!session.proxy_id,
     cpu_percent: session.status === 'running' ? 42 : 0,
@@ -61,7 +62,7 @@ export async function smoke(page) {
     pids: session.status === 'running' ? 7 : 0,
     disk_bytes: 3 * 1024 * 1024, disk_stale: statsReads <= 1,
     net_rx_bytes: netRx, net_tx_bytes: netTx,
-    started_at: session.status === 'running' ? Date.now() - 60000 : 0,
+    started_at: session.status === 'running' ? now - 60000 : 0,
   }));
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => {
@@ -81,9 +82,11 @@ export async function smoke(page) {
     else if (path === '/api/instances/proxies') body = [residentialProxy, datacenterProxy];
     else if (path === '/api/instances/stats') {
       statsReads++;
+      if (failStats) { await route.fulfill({ status: 503, json: { error: '合成采样失败' } }); return; }
       if (netRestart) { netRx = 1024; netTx = 512; netRestart = false; }
       else { netRx += 512 * 1024; netTx += 256 * 1024; }
-      body = { now: Date.now(), window_ms: statsReads > 1 ? 5000 : 0, items: statsItems() };
+      const now = Date.now();
+      body = { now, window_ms: statsReads > 1 ? 5000 : 0, items: statsItems(now) };
     }
     else if (path === '/api/sessions') {
       if (method === 'POST') {
@@ -133,6 +136,20 @@ export async function smoke(page) {
     await page.setViewportSize({ width: 1440, height: 960 });
     await page.goto(base + '/#/');
     await page.waitForFunction(() => document.querySelectorAll('.project-tile').length === 2);
+    assert.equal(await page.locator('.sidebar-instance').count(), 3);
+    assert.equal(await page.locator('.sidebar-project').count(), 2);
+    assert.equal(await page.locator('#btn-workspaces').innerText(), '实例管理');
+    assert.equal(await page.locator('.side-nav[aria-label="工具"] #btn-usagelog').count(), 1);
+    assert.equal(await page.locator('.side-nav[aria-label="系统管理"] #btn-settings').count(), 1);
+    const firstInstance = page.locator('.sidebar-instance[data-session-id="fixture-space"]');
+    assert.equal(await firstInstance.locator('[data-sidebar-project-id="fixture-project"]').count(), 1);
+    await firstInstance.locator('summary').focus();
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !document.querySelector('.sidebar-instance[data-session-id="fixture-space"]').open);
+    await refresh();
+    assert.equal(await firstInstance.evaluate(element => element.open), false, 'refresh preserves collapsed instance');
+    await firstInstance.locator('summary').click();
+    await page.waitForFunction(() => document.querySelector('.sidebar-instance[data-session-id="fixture-space"]').open);
     assert.equal(await page.locator('#empty-new').innerText(), '新建项目');
     assert.equal(await page.locator('#btn-new').innerText(), '新建项目');
     assert.equal(await page.locator('#btn-settings').isVisible(), false);
@@ -201,6 +218,12 @@ export async function smoke(page) {
     assert.equal(await page.locator('#btn-projects').getAttribute('aria-current'), null);
     assert.equal(await page.locator('.workspace-tile').count(), 3);
     assert.equal(await page.locator('#workspace-accounts').innerText(), '2', 'claude + codex bindings are counted separately');
+    assert.equal(await page.locator('#workspace-total').innerText(), '3');
+    assert.equal(await page.locator('#workspace-running').innerText(), '1');
+    assert.equal(await page.locator('#workspace-stopped').innerText(), '2');
+    assert.equal(await page.locator('#workspace-created').innerText(), '2');
+    assert.equal(await page.locator('#workspace-pending').innerText(), '1');
+    assert.equal(await page.locator('#workspace-proxy-missing').innerText(), '0');
     const firstTile = page.locator('.workspace-tile').first();
     assert.match(await firstTile.innerText(), /fixture-container-a/);
     assert.match(await firstTile.innerText(), /开发账号/, 'the bound claude account is listed');
@@ -215,6 +238,19 @@ export async function smoke(page) {
     const usageText = await firstTile.locator('dl.workspace-usage').innerText();
     assert.match(usageText, /CPU\s+测量中/);
     assert.match(usageText, /磁盘\s+统计中/);
+    assert.equal(await page.locator('#workspace-cpu').innerText(), '测量中');
+    assert.equal(await page.locator('#workspace-disk').innerText(), '统计中');
+    assert.equal(await page.locator('#workspace-memory').innerText(), '512 MB');
+    assert.equal(await page.locator('#workspace-pids').innerText(), '7');
+    assert.match(usageText, /运行时间\s+1 分钟/);
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+    await firstTile.getByRole('button', { name: '复制容器 ID' }).click();
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'fixture-container-a');
+    await page.keyboard.press('Tab');
+    await page.locator('.instance-help').focus();
+    await page.locator('#tip:popover-open').waitFor();
+    assert.match(await page.locator('#tip').innerText(), /CPU 按单核计量/);
+    await page.locator('.instance-help').evaluate(element => element.blur());
     assert.doesNotMatch(await page.locator('.workspace-tile').nth(1).locator('dl.workspace-usage').innerText(), /CPU\s+\d/, 'stopped instance must not show a number');
     await page.locator('#toast.show').waitFor({ state: 'hidden' });
     await page.screenshot({ animations: 'disabled', path: resolve('output/playwright/workspaces-desktop-light.png') });
@@ -233,6 +269,19 @@ export async function smoke(page) {
       return !!usage && !usage.textContent.includes('测量中') && usage.textContent.includes('%');
     });
     await page.screenshot({ animations: 'disabled', path: resolve('output/playwright/workspaces-live-desktop-light.png') });
+
+    assert.equal(await page.locator('#workspace-cpu').innerText(), '42.0%');
+    assert.equal(await page.locator('#workspace-disk').innerText(), '9.0 MB');
+    const usageBeforeFailure = await firstTile.locator('dl.workspace-usage').innerText();
+    failStats = true;
+    await page.locator('#workspace-refresh').click();
+    await page.waitForFunction(() => document.querySelector('#workspace-sample-badge').textContent === '采样失败');
+    assert.match(await page.locator('#workspace-sample-status').innerText(), /保留上次读数/);
+    assert.equal(await firstTile.locator('dl.workspace-usage').innerText(), usageBeforeFailure);
+    assert.equal(await page.locator('#workspace-refresh').isDisabled(), false);
+    failStats = false;
+    await page.locator('#workspace-refresh').click();
+    await page.waitForFunction(() => document.querySelector('#workspace-sample-badge').textContent === '实时采样');
 
     // 容器重启后计数器回退：那一帧网络必须显示「测量中」，下一帧恢复速率。
     // 不能把负差压成 ↓ 0 B/s，也不能拿「真计数 − 失败帧的 0」冒充峰值。
@@ -284,8 +333,9 @@ export async function smoke(page) {
     assert.equal(terminalURLs.length, 0, 'configuration and creation must not open a terminal');
 
     await page.locator('#btn-projects').click();
-    await page.locator('[data-project-id="fixture-project"]').click();
+    await page.locator('[data-sidebar-project-id="fixture-project"]').click();
     await page.waitForURL('**/#/projects/fixture-space/fixture-project/term');
+    assert.equal(await page.locator('[data-sidebar-project-id="fixture-project"]').getAttribute('aria-current'), 'page');
     await page.waitForFunction(() => document.querySelector('#term-state').textContent.includes('已连接'));
     const terminalURL = new URL(terminalURLs.at(-1));
     assert.equal(terminalURL.searchParams.get('mode'), 'agent');
@@ -302,7 +352,7 @@ export async function smoke(page) {
     await page.reload();
     await page.locator('#tab-files').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#wb-name').innerText(), '订单服务 + API');
-    await page.locator('.session-card[data-session-id="fixture-space"]').click();
+    await page.goto(base + '/#/sessions/fixture-space/chat');
     await page.waitForURL('**/#/sessions/fixture-space/chat');
     assert.equal(await page.locator('.tab[data-tab="chat"]').isVisible(), true);
     assert.equal(await page.locator('#wb-name').innerText(), '产品开发');
@@ -310,12 +360,12 @@ export async function smoke(page) {
 
     // 技能/MCP 页签按绑定账号判定：默认 Codex、同时绑定 Claude 的实例仍可用；
     // 纯 Codex 实例（没有 Claude 账号）才隐藏。
-    await page.locator('.session-card[data-session-id="fixture-second"]').click();
+    await page.goto(base + '/#/sessions/fixture-second/chat');
     await page.waitForURL('**/#/sessions/fixture-second/chat');
     await page.waitForFunction(() => document.querySelector('#wb-name')?.textContent === '内部工具');
     await page.locator('#tab-btn-skills').waitFor({ state: 'visible' });
     await page.locator('#tab-btn-mcp').waitFor({ state: 'visible' });
-    await page.locator('.session-card[data-session-id="fixture-third"]').click();
+    await page.goto(base + '/#/sessions/fixture-third/chat');
     await page.waitForURL('**/#/sessions/fixture-third/chat');
     await page.waitForFunction(() => document.querySelector('#wb-name')?.textContent === '纯 Codex');
     assert.equal(await page.locator('#tab-btn-skills').isVisible(), false);
@@ -376,6 +426,13 @@ export async function smoke(page) {
         assert.equal(themeGroupVisible, width > 760, 'wide screens show the three-state group');
         assert.equal(await page.locator('#btn-user-menu').isVisible(), true);
         assert.equal(await page.locator('#btn-menu').isVisible(), width <= 760);
+        if (width <= 760) {
+          await page.locator('#btn-menu').click();
+          assert.equal(await page.locator('#sidebar').getAttribute('inert'), null);
+          assert.equal(await page.locator('#sidebar').evaluate(element => element.scrollWidth <= element.clientWidth), true);
+          await page.screenshot({ animations: 'disabled', path: resolve(`output/playwright/sidebar-${width}-${theme}.png`) });
+          await page.locator('#btn-sidebar-close').click();
+        }
         await page.screenshot({ animations: 'disabled', path: resolve(`output/playwright/projects-${width}-${theme}.png`) });
         await page.goto(base + '/#/workspaces');
         await page.locator('#workspace-grid .workspace-tile').first().waitFor();
@@ -386,6 +443,15 @@ export async function smoke(page) {
       }
     }
     await page.setViewportSize({ width: 1440, height: 960 });
+    sessions = [sessions.find(session => session.id === 'fixture-space')];
+    projects['fixture-space'] = [project('fixture-client', 'agentbox-client'), project('fixture-reminder', '叮叮提醒')];
+    await refresh();
+    await page.waitForFunction(() => document.querySelectorAll('.sidebar-project').length === 2);
+    assert.equal(await page.locator('.sidebar-instance').count(), 1, 'two projects must not become two instances');
+    assert.equal(await page.locator('#session-count').innerText(), '1');
+    assert.equal(await page.locator('.sidebar-instance[data-session-id="fixture-space"] .sidebar-project').count(), 2);
+    assert.equal(await page.locator('.side-nav[aria-label="系统管理"]').isVisible(), false, 'ordinary users must not see an empty admin group');
+    await page.screenshot({ animations: 'disabled', path: resolve('output/playwright/sidebar-single-instance-light.png') });
     sessions = [];
     await refresh();
     await page.locator('#project-empty-configure').waitFor({ state: 'visible' });
@@ -393,6 +459,10 @@ export async function smoke(page) {
     assert.equal(await page.locator('#project-ok').isDisabled(), true);
     await page.locator('#project-configure').click();
     await page.locator('#workspace-empty').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#workspace-sample-badge').innerText(), '暂无实例');
+    assert.equal(await page.locator('#workspace-refresh').isDisabled(), true);
+    assert.equal(await page.locator('#workspace-cpu').innerText(), '0.0%');
+    assert.equal(await page.locator('#workspace-disk').innerText(), '0 B');
     await page.goto(base + '/#/');
     holdList = true;
     sessions = [makeSession('fixture-second', { name: '延迟列表' })];

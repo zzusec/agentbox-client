@@ -223,36 +223,42 @@
         </button>
       </div>
 
-      <nav class="console-nav" aria-label="工作台">
-        <span class="side-label">工作台</span>
-        <button id="btn-projects" type="button" class="side-item active" data-tip="项目"><svg width="19" height="19" data-icon="folder" aria-hidden="true"></svg><span class="side-item-label">项目</span></button>
-        <button id="btn-workspaces" type="button" class="side-item" data-tip="实例"><svg width="19" height="19" data-icon="settings" aria-hidden="true"></svg><span class="side-item-label">实例</span></button>
+      <nav class="console-nav" aria-label="工作区">
+        <span class="side-label">工作区</span>
+        <button id="btn-projects" type="button" class="side-item active" data-tip="所有项目"><svg width="19" height="19" data-icon="folder" aria-hidden="true"></svg><span class="side-item-label">所有项目</span></button>
+        <button id="btn-workspaces" type="button" class="side-item" data-tip="实例管理"><svg width="19" height="19" data-icon="box" aria-hidden="true"></svg><span class="side-item-label">实例管理</span></button>
       </nav>
 
-      <section class="side-sessions" aria-label="实例">
-        <div class="side-section-head"><span class="side-label">实例快捷访问</span><span id="session-count" class="side-count">0</span></div>
+      <section class="side-sessions" aria-label="实例与项目">
+        <div class="side-section-head"><span class="side-label">实例与项目</span><span id="session-count" class="side-count">0</span></div>
         <div id="session-list" class="session-list"></div>
       </section>
 
       <footer class="side-foot">
         <!-- 使用记录与内网隧道、设置共用图标工具栏；主题与账号在顶栏，余额在用户弹层。 -->
-        <nav class="side-nav" aria-label="管理与工具">
+        <nav class="side-nav" aria-label="工具">
           <div class="side-tools">
-            <div id="conn-latency" class="conn-latency" tabindex="0" data-tip="到服务器的连接延迟">
-              <span id="conn-dot" class="t-dot"></span>
-              <span id="conn-text" class="conn-text mono">连接中…</span>
-            </div>
+            <span class="side-label side-group-label">工具</span>
             <button id="btn-usagelog" aria-label="使用记录" data-tip="使用记录" class="side-item side-tool"><span class="glyph">
               <svg width="17" height="17" data-icon="list" aria-hidden="true"></svg>
             </span><span class="side-item-label">使用记录</span></button>
             <button id="btn-tunnel" aria-label="内网隧道" data-tip="内网隧道" class="side-item side-tool hidden"><span class="glyph">
               <svg width="17" height="17" data-icon="link" aria-hidden="true"></svg>
             </span><span class="side-item-label">内网隧道</span><span id="tunnel-state" class="tunnel-state mono"><span id="tunnel-dot" class="t-dot"></span><span id="tunnel-text">离线</span></span></button>
+          </div>
+        </nav>
+        <nav class="side-nav" aria-label="系统管理">
+          <div class="side-tools">
+            <span class="side-label side-group-label">系统管理</span>
             <button id="btn-settings" aria-label="系统设置" data-tip="系统设置" class="side-item side-tool"><span class="glyph">
               <svg width="17" height="17" data-icon="settings" aria-hidden="true"></svg>
             </span><span class="side-item-label">系统设置</span></button>
           </div>
         </nav>
+        <div id="conn-latency" class="conn-latency" tabindex="0" data-tip="到服务器的连接延迟">
+          <span id="conn-dot" class="t-dot"></span>
+          <span id="conn-text" class="conn-text mono">连接中…</span>
+        </div>
       </footer>
     </aside>
 
@@ -590,13 +596,35 @@
 
       <div id="view-workspaces" class="view hidden">
         <div class="console-page">
-          <header class="console-page-head"><div><h1>实例</h1><p>一个实例，一套运行环境。实例可同时绑定 Claude 与 Codex 账号，出口代理绑在实例上；实例下的项目共享同一个容器。</p></div><button id="btn-new-workspace" type="button" class="btn btn-primary" data-icon="plus">新建实例</button></header>
-          <div class="console-stats" aria-label="实例概览">
-            <div class="console-stat"><span class="console-icon"><svg width="20" height="20" data-icon="panel-left" aria-hidden="true"></svg></span><span>实例总数</span><strong id="workspace-total">0</strong><small>现有实例全部保留</small></div>
-            <div class="console-stat"><span class="console-icon"><svg width="20" height="20" data-icon="play" aria-hidden="true"></svg></span><span>正在运行</span><strong id="workspace-running">0</strong><small>不会因浏览本页启动或停止容器</small></div>
+          <header class="console-page-head"><div><h1>实例管理</h1><p>每个实例对应一个 Docker 容器。查看运行状态与资源占用，在同一环境中继续 Claude / Codex 工作。</p></div><div class="instance-page-actions"><button id="workspace-refresh" type="button" class="btn" data-icon="refresh" data-tip="立即刷新实例资源，不启动或停止容器">刷新</button><button id="btn-new-workspace" type="button" class="btn btn-primary" data-icon="plus">新建实例</button></div></header>
+          <div class="console-stats instance-overview" aria-label="实例概览">
+            <div class="console-stat"><span class="console-icon"><svg width="20" height="20" data-icon="box" aria-hidden="true"></svg></span><span>实例总数</span><strong id="workspace-total">0</strong><small>当前账号的 Docker 容器环境</small></div>
+            <div class="console-stat"><span class="console-icon"><svg width="20" height="20" data-icon="play" aria-hidden="true"></svg></span><span>正在运行</span><strong id="workspace-running">0</strong><small>实时容器状态，不自动启停</small></div>
+            <div class="console-stat"><span class="console-icon"><svg width="20" height="20" data-icon="stop" aria-hidden="true"></svg></span><span>未运行</span><strong id="workspace-stopped">0</strong><small>包含已停止与尚未启动的实例</small></div>
             <div class="console-stat"><span class="console-icon"><svg width="20" height="20" data-icon="user" aria-hidden="true"></svg></span><span>已绑定账号</span><strong id="workspace-accounts">0</strong><small>Claude 与 Codex 账号分别统计</small></div>
           </div>
-          <section class="console-section" aria-labelledby="workspace-list-title"><div class="console-section-head"><h2 id="workspace-list-title">运行环境</h2><span class="tile-meta">账号与代理池在系统设置中管理</span></div><div id="workspace-grid" class="workspace-grid"></div><div id="workspace-empty" class="console-empty"><span class="console-icon"><svg width="26" height="26" data-icon="settings" aria-hidden="true"></svg></span><h3>还没有实例</h3><p>使用上方「新建实例」绑定账号并选择住宅代理，再为这个实例添加项目。</p></div></section>
+          <div class="instance-panels">
+            <section class="instance-panel" aria-labelledby="instance-resources-title">
+              <header class="instance-panel-head"><h2 id="instance-resources-title"><span class="console-icon"><svg width="20" height="20" data-icon="cpu" aria-hidden="true"></svg></span>资源总览<button type="button" class="instance-help" data-icon="info" aria-label="资源统计口径说明" data-tip="CPU、内存与进程为运行中容器合计；CPU 按单核计量，可超过 100%。文件占用包含所有实例的工作区与 home。采样未就绪时不显示零值。"></button></h2><span class="tile-meta">当前账号实例合计</span></header>
+              <dl class="instance-metrics">
+                <div><dt>CPU</dt><dd id="workspace-cpu">—</dd></div>
+                <div><dt>内存使用</dt><dd id="workspace-memory">—</dd></div>
+                <div><dt>容器进程</dt><dd id="workspace-pids">—</dd></div>
+                <div><dt>文件占用</dt><dd id="workspace-disk">—</dd></div>
+              </dl>
+              <p class="instance-panel-note">CPU 按单核计量，可超过 100%；文件占用包含工作区与 home。</p>
+            </section>
+            <section class="instance-panel" aria-labelledby="instance-health-title">
+              <header class="instance-panel-head"><h2 id="instance-health-title"><span class="console-icon"><svg width="20" height="20" data-icon="activity" aria-hidden="true"></svg></span>运行概况</h2><span class="console-status" id="workspace-sample-badge">等待采样</span></header>
+              <dl class="instance-metrics instance-health-metrics">
+                <div><dt>已创建容器</dt><dd id="workspace-created">0</dd></div>
+                <div><dt>待创建容器</dt><dd id="workspace-pending">0</dd></div>
+                <div><dt>出口待配置</dt><dd id="workspace-proxy-missing">0</dd></div>
+              </dl>
+              <p id="workspace-sample-status" class="instance-panel-note" role="status">进入实例页后每 5 秒采样；离开页面即停止。</p>
+            </section>
+          </div>
+          <section class="console-section instance-list" aria-labelledby="workspace-list-title"><div class="console-section-head"><h2 id="workspace-list-title"><span class="console-icon"><svg width="20" height="20" data-icon="box" aria-hidden="true"></svg></span>实例环境</h2><span class="tile-meta">实例名称 · Docker 容器 · 实时资源</span></div><div id="workspace-grid" class="workspace-grid"></div><div id="workspace-empty" class="console-empty"><span class="console-icon"><svg width="26" height="26" data-icon="box" aria-hidden="true"></svg></span><h3>还没有实例</h3><p>使用上方「新建实例」绑定账号并选择住宅代理，再为这个实例添加项目。</p></div></section>
         </div>
       </div>
 

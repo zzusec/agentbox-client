@@ -6,10 +6,12 @@
 import { S, bus, emit } from "./state.js";
 import type { View } from "./state.js";
 import { $, toast } from "./util.js";
-import { agentIcon, agentAvatar, agentName } from "./brand.js";
+import { agentIcon, agentName } from "./brand.js";
 import { hideTip, setTip } from "./tip.js";
 import { boundAccounts, instanceToolsLabel } from "./data.js";
 import { api } from "./api.js";
+import type { Project } from "./types.js";
+import { svgIcon } from "./icons.js";
 
 /* ---- 侧栏：桌面收起偏好与移动抽屉各自独立 ---- */
 
@@ -292,6 +294,15 @@ $("btn-tunnel").addEventListener("click", () => emit("open-tunnel"));
 
 /* ---- 侧栏：会话列表 ---- */
 
+const sidebarProjects = new Map<string, { projects: Project[]; error: string }>();
+const expandedInstances = new Map<string, boolean>();
+
+export function setSidebarProjects(rows: { session: { id: string }; projects: Project[]; error: string }[]) {
+  sidebarProjects.clear();
+  for (const row of rows) sidebarProjects.set(row.session.id, row);
+  renderSidebar();
+}
+
 export function renderSidebar() {
   renderUserMenu();
   const home = S.view === "work" && !S.current;
@@ -300,29 +311,35 @@ export function renderSidebar() {
   else $("btn-projects").removeAttribute("aria-current");
   const list = $("session-list");
   const scrollTop = list.scrollTop;
-  const focusedID = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(".session-card")?.dataset.sessionId;
+  const focused = document.activeElement as HTMLElement | null;
+  const focusedID = focused?.closest<HTMLElement>("[data-session-id]")?.dataset.sessionId;
+  const focusedProject = focused?.dataset.sidebarProjectId;
   list.replaceChildren();
   $("session-count").textContent = String(S.sessions.length);
   if (!S.sessions.length) {
     const p = document.createElement("p");
     p.className = "session-empty";
-    p.innerHTML = '<span class="session-empty-icon" aria-hidden="true">—</span><span class="session-empty-text">还没有工作空间，请前往工作空间配置。</span>';
-    setTip(p, "请前往工作空间配置创建工作空间");
+    p.textContent = "还没有实例，请前往实例管理创建。";
+    setTip(p, "请前往实例管理创建实例");
     list.appendChild(p);
   }
   for (const sess of S.sessions) {
-    const card = document.createElement("button");
+    const group = document.createElement("details");
+    group.className = "sidebar-instance";
+    group.dataset.sessionId = sess.id;
+    group.open = expandedInstances.get(sess.id) ?? true;
+    group.addEventListener("toggle", () => {
+      if (group.isConnected) expandedInstances.set(sess.id, group.open);
+    });
+    const card = document.createElement("summary");
     const active = S.view === "work" && S.current?.id === sess.id;
-    card.type = "button";
     card.className = "session-card" + (active ? " active" : "");
     card.dataset.sessionId = sess.id;
-    if (active) card.setAttribute("aria-current", "page");
     const status = sess.status === "running" ? "运行中" : sess.stop_reason === "idle" ? "休眠" : "已停止";
     card.setAttribute("aria-label", `${sess.name}（${instanceToolsLabel(sess)}，${status}）`);
     const accounts = boundAccounts(sess).map(account => `${agentName(account.tool)}：${account.label}`).join("\n") || "未绑定账号";
     setTip(card, `${sess.name}\n${accounts}\n${status} · #${sess.id}`);
-    const av = agentAvatar(sess.agent, { led: true });
-    if (sess.status === "running") av.querySelector(".led")!.classList.add("on");
+    const av = svgIcon("box", 18);
     const body = document.createElement("span");
     body.className = "sc-body";
     const h = document.createElement("span");
@@ -330,24 +347,53 @@ export function renderSidebar() {
     h.textContent = sess.name;
     const meta = document.createElement("span");
     meta.className = "meta";
-    // 一行放不下两个账号名，这里只报绑了哪几个工具；具体账号在实例页里。
-    meta.textContent = instanceToolsLabel(sess);
+    meta.textContent = status;
     body.append(h, meta);
-    // 休眠 = 空闲自动停机（数据都在，发消息/开终端即自动唤醒）。与用户手动
-    // 停止区分开，否则回来发现会话没了会以为服务出了故障。
-    if (sess.stop_reason === "idle" && sess.status !== "running") {
-      const zzz = document.createElement("span");
-      zzz.className = "sc-sleep";
-      zzz.textContent = "休眠";
-      meta.append(document.createTextNode(" · "), zzz);
+    const caret = svgIcon("caret", 14);
+    caret.classList.add("sidebar-instance-caret");
+    card.append(av, body, caret);
+    const children = document.createElement("div");
+    children.className = "sidebar-projects";
+    const row = sidebarProjects.get(sess.id);
+    for (const project of row?.projects ?? []) {
+      const link = document.createElement("button");
+      link.type = "button";
+      link.className = "side-item sidebar-project";
+      link.dataset.sidebarProjectId = project.id;
+      const selected = active && S.project?.id === project.id;
+      link.classList.toggle("active", selected);
+      if (selected) link.setAttribute("aria-current", "page");
+      const label = document.createElement("span");
+      label.className = "side-item-label";
+      label.textContent = project.name;
+      link.append(svgIcon("folder", 16), label);
+      link.setAttribute("aria-label", `打开项目 ${project.name}（${sess.name}）`);
+      setTip(link, `${project.name}\n${project.path}`);
+      link.addEventListener("click", () => emit("open-sidebar-project", { session: sess, project }));
+      children.append(link);
     }
-    card.append(av, body);
-    const open = () => emit("open-session", sess);
-    card.addEventListener("click", open);
-    list.appendChild(card);
-    if (focusedID === sess.id) card.focus({ preventScroll: true });
+    if (!row || row.error || !row.projects.length) {
+      const message = document.createElement("p");
+      message.className = "sidebar-project-message";
+      message.textContent = !row ? "正在读取项目…" : row.error ? "项目读取失败，点击重试" : "暂无项目，点击新建项目添加";
+      if (row?.error) {
+        const retry = document.createElement("button");
+        retry.type = "button";
+        retry.className = "sidebar-project-retry";
+        retry.textContent = message.textContent;
+        retry.addEventListener("click", () => emit("projects-home"));
+        children.append(retry);
+      } else children.append(message);
+    }
+    group.append(card, children);
+    list.append(group);
+    if (focusedID === sess.id) {
+      const target = focusedProject ? [...children.querySelectorAll<HTMLElement>("button")].find(link => link.dataset.sidebarProjectId === focusedProject) : card;
+      target?.focus({ preventScroll: true });
+    }
   }
   list.scrollTop = scrollTop;
 }
 
 bus.addEventListener("data-updated", renderSidebar);
+bus.addEventListener("unauthorized", () => { sidebarProjects.clear(); expandedInstances.clear(); });

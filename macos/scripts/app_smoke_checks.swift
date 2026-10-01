@@ -465,9 +465,9 @@ struct AppSmokeChecks {
         ProjectSyncStore.remove("w1", projectID: "p2", defaults: defaults)
         precondition(ProjectSyncStore.settings(for: "w1", defaults: defaults).isEmpty)
 
-        precondition(ProjectSyncSetting.policyLabel(nil) == "跟随工作空间")
-        precondition(ProjectSyncSetting.policyLabel("server") == "以服务器为准")
-        precondition(ProjectSyncSetting.policyLabel("local") == "以本地为准")
+        precondition(ProjectSyncSetting.policyLabel(nil) == "双向同步（默认）")
+        precondition(ProjectSyncSetting.policyLabel("server") == "从服务器下载到本地")
+        precondition(ProjectSyncSetting.policyLabel("local") == "从本地上传到服务器")
 
         // New-project sheet: name, local workspace, sync mode.
         let sheet = NewProjectViewController()
@@ -484,7 +484,7 @@ struct AppSmokeChecks {
             preconditionFailure("new-project sheet is missing name, local workspace, sync mode or create")
         }
         precondition(
-            policyPopup.itemArray.map(\.title) == ["跟随工作空间", "以服务器为准", "以本地为准"],
+            policyPopup.itemArray.map(\.title) == ["双向同步（默认）", "从服务器下载到本地", "从本地上传到服务器"],
             "unexpected sync modes: \(policyPopup.itemArray.map(\.title))"
         )
 
@@ -536,11 +536,9 @@ struct AppSmokeChecks {
         sidebar.loadViewIfNeeded()
         let project = RemoteProject(id: "p1", name: "demo", path: "/workspace/demo")
         var renamed: RemoteProject?
-        var changedDir: RemoteProject?
         var changedPolicy: (project: RemoteProject, policy: String?)?
         var syncedNow: (project: RemoteProject, policy: String)?
         sidebar.onRenameProject = { renamed = $0 }
-        sidebar.onChangeProjectLocalDir = { changedDir = $0 }
         sidebar.onChangeProjectPolicy = { changedPolicy = (project: $0, policy: $1) }
         sidebar.onSyncProjectNow = { syncedNow = (project: $0, policy: $1) }
         sidebar.projectPolicyForDisplay = { _ in "server" }
@@ -549,7 +547,7 @@ struct AppSmokeChecks {
         sidebar.populate(menu, with: project)
         let titles = menu.items.map(\.title)
         precondition(titles.contains("修改项目名称…"), "menu must offer renaming: \(titles)")
-        precondition(titles.contains("修改本地工作空间…"), "menu must offer the local workspace: \(titles)")
+        precondition(!titles.contains("修改本地工作空间…"), "removed local-directory action must stay absent: \(titles)")
         precondition(titles.contains("修改同步方式"), "menu must offer the sync mode: \(titles)")
         precondition(titles.contains("打开同步日志"), "menu must offer the sync log: \(titles)")
         // The log is the only durable record of what a pass did.
@@ -567,15 +565,15 @@ struct AppSmokeChecks {
         let rows = policyMenu.items.compactMap { $0.view as? SyncPolicyMenuRow }
         precondition(rows.count == 3, "expected three sync modes, got \(rows.count)")
         precondition(
-            rows.map(\.title) == ["跟随工作空间", "以服务器为准", "以本地为准"],
+            rows.map(\.title) == ["双向同步（默认）", "从服务器下载到本地", "从本地上传到服务器"],
             "unexpected sync modes: \(rows.map(\.title))"
         )
         precondition(
-            rows.filter(\.isChecked).map(\.title) == ["以服务器为准"],
+            rows.filter(\.isChecked).map(\.title) == ["从服务器下载到本地"],
             "the project's current policy must be the checked row"
         )
         precondition(
-            rows.filter(\.hasSyncNow).map(\.title) == ["以服务器为准", "以本地为准"],
+            rows.filter(\.hasSyncNow).map(\.title) == ["从服务器下载到本地", "从本地上传到服务器"],
             "only the two real modes may offer 立即同步"
         )
 
@@ -605,10 +603,6 @@ struct AppSmokeChecks {
         precondition(NSApp.sendAction(renameItem.action!, to: renameItem.target, from: renameItem))
         try await drainMainQueue()
         precondition(renamed?.id == "p1", "a deferred menu action must still land")
-        let dirItem = menu.items.first { $0.title == "修改本地工作空间…" }!
-        precondition(NSApp.sendAction(dirItem.action!, to: dirItem.target, from: dirItem))
-        try await drainMainQueue()
-        precondition(changedDir?.id == "p1")
 
         // Tapping the row only picks the side...
         rows[2].select()
@@ -713,20 +707,14 @@ struct AppSmokeChecks {
         precondition(sidebar.view.isHidden)
         precondition(NSApp.sendAction(toolbarItem.action!, to: toolbarItem.target, from: toolbarItem))
         precondition(!sidebar.view.isHidden)
-        let choose = views(in: sidebar.view).compactMap { $0 as? NSButton }.first { $0.title == "选择目录" }!
-        precondition(choose.acceptsFirstMouse(for: nil))
-        choose.performClick(nil)
-        try await waitFor("Directory chooser was not presented as a sheet") { window.attachedSheet != nil }
-        (window.attachedSheet as! NSOpenPanel).cancel(nil)
-        try await waitFor("Directory chooser did not close") { window.attachedSheet == nil }
-        precondition(UserDefaults.standard.object(forKey: "agentbox.local-root.\(beta.id)") == nil, "Cancel changed local directory preferences")
+        precondition(!views(in: sidebar.view).compactMap { $0 as? NSButton }.contains { $0.title == "选择目录" }, "removed workspace sync panel must stay absent")
         if let output = ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_IMAGE"] {
             controller.view.layoutSubtreeIfNeeded()
             let bitmap = controller.view.bitmapImageRepForCachingDisplay(in: controller.view.bounds)!
             controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
-        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle and directory cancellation")
+        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle and removed sync panel")
         if ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_KEEP_OPEN"] == "1" {
             try await Task.sleep(nanoseconds: 120_000_000_000)
         }

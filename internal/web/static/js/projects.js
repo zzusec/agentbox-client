@@ -5,10 +5,10 @@ import { setSelectValue } from "./select.js";
 import { openSession } from "./sessions.js";
 import { boundAccounts, instanceTools } from "./data.js";
 import { Poller } from "./shared/poller.js";
-import { showView } from "./shell.js";
+import { showView, setSidebarProjects } from "./shell.js";
 import { svgIcon } from "./chat-render.js";
 import { agentName } from "./brand.js";
-import { buttonLabel } from "./icons.js";
+import { buttonLabel, actionButton } from "./icons.js";
 /** 实例资源轮询间隔。服务端的 CPU 是两次采样的差值，5 秒既够看出趋势，也不至于
  * 让「打开实例页」变成持续的后台负担。 */
 const STATS_INTERVAL = 5000;
@@ -45,6 +45,8 @@ export function initProjects() {
     const stats = new Map();
     let statsWindow = 0;
     let statsReceivedAt = 0;
+    let statsServerNow = 0;
+    let statsError = false;
     let statsActive = false;
     const previousNet = new Map();
     const statsPoller = new Poller();
@@ -145,6 +147,44 @@ export function initProjects() {
     function metric(dl, label, value) {
         dl.append(text("dt", "", label), text("dd", "", value));
     }
+    function uptime(stat) {
+        if (!stat?.running)
+            return "已停止";
+        if (!stat.started_at || statsServerNow < stat.started_at)
+            return "测量中";
+        const minutes = Math.floor((statsServerNow - stat.started_at) / 60000);
+        if (minutes < 1)
+            return "不足 1 分钟";
+        if (minutes < 60)
+            return `${minutes} 分钟`;
+        if (minutes < 1440)
+            return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`;
+        return `${Math.floor(minutes / 1440)} 天 ${Math.floor(minutes % 1440 / 60)} 小时`;
+    }
+    function renderInstanceSummary() {
+        const currentStats = S.sessions.map(session => stats.get(session.id));
+        const running = S.sessions.filter(session => stats.get(session.id)?.running ?? session.status === "running");
+        const runningStats = running.map(session => stats.get(session.id));
+        const sampled = runningStats.every(stat => stat && stat.sample_ok !== false);
+        const cpuReady = sampled && (!running.length || statsWindow > 0) && runningStats.every(stat => stat?.cpu_ready !== false);
+        const sum = (field, values = runningStats) => values.reduce((total, stat) => total + (stat?.[field] || 0), 0);
+        $("workspace-running").textContent = String(running.length);
+        $("workspace-stopped").textContent = String(S.sessions.length - running.length);
+        $("workspace-cpu").textContent = cpuReady ? `${sum("cpu_percent").toFixed(1)}%` : "测量中";
+        $("workspace-memory").textContent = sampled ? formatBytes(sum("mem_usage")) : "测量中";
+        $("workspace-pids").textContent = sampled ? String(sum("pids")) : "测量中";
+        $("workspace-disk").textContent = currentStats.every(stat => stat && !stat.disk_stale) ? formatBytes(sum("disk_bytes", currentStats)) : "统计中";
+        const created = S.sessions.filter(session => session.container_id).length;
+        $("workspace-created").textContent = String(created);
+        $("workspace-pending").textContent = String(S.sessions.length - created);
+        $("workspace-proxy-missing").textContent = String(S.sessions.filter(session => stats.get(session.id)?.proxy_bound === false || !session.proxy_id).length);
+        const badge = $("workspace-sample-badge");
+        badge.className = "console-status" + (statsReceivedAt && !statsError && sampled ? " running" : "");
+        badge.textContent = !S.sessions.length ? "暂无实例" : statsError ? "采样失败" : statsReceivedAt ? sampled ? "实时采样" : "部分待采样" : "等待采样";
+        $("workspace-sample-status").textContent = !S.sessions.length ? "创建实例后显示实时资源。" : statsError ? "资源采样失败，保留上次读数；5 秒后自动重试。" : statsReceivedAt ? `采样于 ${new Date(statsServerNow).toLocaleTimeString()} · 每 5 秒刷新，仅显示你的实例。` : "正在读取容器资源；CPU 与网络速率需要两次采样。";
+        if (!S.sessions.length)
+            $("workspace-refresh").disabled = true;
+    }
     function resourceRows(session) {
         const stat = stats.get(session.id);
         const running = stat ? stat.running : session.status === "running";
@@ -167,13 +207,13 @@ export function initProjects() {
                     " ↑ " + formatRate((stat.net_tx_bytes - previous.tx) / elapsed);
             }
         }
-        return [["CPU", cpu], ["内存", memory], ["磁盘", disk], ["网络", network]];
+        return [["CPU", cpu], ["内存", memory], ["磁盘", disk], ["网络", network], ["容器进程", stat.sample_ok === false ? "测量中" : String(stat.pids)], ["运行时间", uptime(stat)]];
     }
     function renderWorkspaces() {
         const list = $("workspace-grid");
         list.replaceChildren();
         $("workspace-total").textContent = String(S.sessions.length);
-        $("workspace-running").textContent = String(S.sessions.filter(session => session.status === "running").length);
+        renderInstanceSummary();
         const accountIDs = new Set();
         for (const session of S.sessions)
             for (const account of boundAccounts(session))
@@ -188,8 +228,9 @@ export function initProjects() {
             heading.className = "tile-heading";
             const icon = document.createElement("span");
             icon.className = "console-icon";
-            icon.append(svgIcon("folder", 20));
-            heading.append(icon, text("h2", "tile-title", session.name), text("span", "console-status" + (session.status === "running" ? " running" : ""), session.status === "running" ? "运行中" : "已停止"));
+            icon.append(svgIcon("box", 20));
+            const running = stats.get(session.id)?.running ?? session.status === "running";
+            heading.append(icon, text("h3", "tile-title", session.name), text("span", "console-status" + (running ? " running" : ""), running ? "运行中" : "已停止"));
             const details = document.createElement("dl");
             details.className = "workspace-details";
             const accounts = boundAccounts(session);
@@ -212,7 +253,18 @@ export function initProjects() {
             const actions = document.createElement("div");
             actions.className = "tile-actions";
             actions.append(button("打开工作台", () => { void openSession(session); }), button("新建项目", () => openCreate(session.id), true));
-            card.append(heading, details, resources, actions);
+            const identity = text("p", "instance-identity", session.container_id ? `Docker · ${session.container_id}` : "Docker · 首次启动时创建容器");
+            if (session.container_id) {
+                const containerID = session.container_id;
+                const copy = actionButton(document.createElement("button"), "", "copy", "复制容器 ID");
+                copy.type = "button";
+                copy.classList.add("instance-copy");
+                copy.addEventListener("click", () => {
+                    void navigator.clipboard.writeText(containerID).then(() => toast("容器 ID 已复制"), () => toast("复制失败，请手动选择容器 ID"));
+                });
+                identity.append(copy);
+            }
+            card.append(heading, identity, resources, details, actions);
             list.append(card);
         }
     }
@@ -221,12 +273,29 @@ export function initProjects() {
         if (S.view !== "workspaces")
             return;
         const token = S.token;
-        const payload = await api("/instances/stats", { signal });
+        const refreshButton = $("workspace-refresh");
+        refreshButton.disabled = true;
+        let payload;
+        try {
+            payload = await api("/instances/stats", { signal });
+            if (!payload || !Array.isArray(payload.items) || !Number.isFinite(payload.now))
+                throw new Error("无效的资源采样");
+        }
+        catch {
+            if (!signal.aborted && token === S.token && S.view === "workspaces") {
+                statsError = true;
+                renderInstanceSummary();
+            }
+            return;
+        }
+        finally {
+            if (!signal.aborted && token === S.token)
+                refreshButton.disabled = false;
+        }
         // 跨账号/跨视图的过期响应一律丢掉：否则退出登录再登录会看到上一个人的数字。
         if (signal.aborted || token !== S.token || S.view !== "workspaces")
             return;
-        if (!payload || !Array.isArray(payload.items))
-            return;
+        statsError = false;
         const receivedAt = Date.now();
         // 用上一帧的读数算速率，然后把这一帧留作下一帧的基准。
         // 采样失败的帧（sample_ok=false，计数器是零值）不能当基线，否则下一帧
@@ -242,6 +311,7 @@ export function initProjects() {
             stats.set(item.session_id, item);
         statsWindow = payload.window_ms || 0;
         statsReceivedAt = receivedAt;
+        statsServerNow = payload.now;
         renderWorkspaces();
     }
     function syncStatsPolling() {
@@ -327,8 +397,6 @@ export function initProjects() {
     async function load() {
         renderWorkspaces();
         syncStatsPolling();
-        if (S.view !== "workspaces" && (S.view !== "work" || S.current))
-            return;
         request?.abort();
         const controller = request = new AbortController();
         rows = rows.filter(row => S.sessions.some(session => session.id === row.session.id));
@@ -349,16 +417,25 @@ export function initProjects() {
             return;
         rows = result;
         loaded = true;
+        setSidebarProjects(rows);
         renderProjects();
     }
     const configure = () => { showView("workspaces"); void load(); };
     bus.addEventListener("open-workspaces", configure, options);
     bus.addEventListener("projects-home", () => { void load(); }, options);
+    bus.addEventListener("open-sidebar-project", event => {
+        const { session, project } = event.detail;
+        void openSession(session, "term", project);
+    }, options);
     bus.addEventListener("data-updated", () => { void load(); }, options);
     // 视图切换与退出登录都要收拾轮询：没人看就不该继续采样。
     bus.addEventListener("view-changed", () => syncStatsPolling(), options);
     bus.addEventListener("unauthorized", () => { statsPoller.stop(); statsActive = false; }, options);
     $("btn-workspaces").addEventListener("click", configure, options);
+    $("workspace-refresh").addEventListener("click", () => {
+        if (S.view === "workspaces" && S.sessions.length)
+            statsPoller.start(STATS_INTERVAL, signal => pollStats(signal));
+    }, options);
     $("project-empty-configure").addEventListener("click", configure, options);
     $("project-configure").addEventListener("click", () => { dialog.close(); configure(); }, options);
     for (const id of ["btn-new", "empty-new", "project-empty-create"]) {
@@ -436,9 +513,14 @@ export function initProjects() {
         dialog.close();
         rows = [];
         loaded = false;
+        setSidebarProjects([]);
         stats.clear();
         previousNet.clear();
         statsWindow = 0;
+        statsReceivedAt = 0;
+        statsServerNow = 0;
+        statsError = false;
+        renderInstanceSummary();
         $("project-grid").replaceChildren();
         $("workspace-grid").replaceChildren();
         $("project-form").reset();

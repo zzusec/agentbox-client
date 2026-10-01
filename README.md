@@ -41,6 +41,8 @@ Chat, terminal, files, and code review share one persistent workspace.
 
 The server is a **single Go binary with an embedded frontend**, using SQLite for state and Docker to isolate workspaces, with systemd deployment and backup tools included.
 
+**Instance management** uses the existing instance page. Each instance is a Docker container environment: overview cards show instance counts, running/non-running states and bound accounts, while resource panels aggregate the current user's CPU, memory, processes and workspace/home disk usage. Instance cards show a copyable container ID, accounts, exit proxy, directory, network rates and current container uptime. Sampling runs every five seconds with a manual refresh option, stopping on navigation or logout. Unknown readings remain marked as measuring; failed requests retain the previous readings with a retry notice. Refresh never starts/stops containers or exposes other users' instances. Start/stop, rename and delete remain available in the instance workbench.
+
 ## Screenshots
 
 These are **browser screenshots of the current source UI**, using synthetic projects, conversations, terminal output, and usage data. They contain no real accounts or business records and do not represent live model results. Released versions may differ from the current source. Click an image to enlarge it. The app interface is currently in Chinese.
