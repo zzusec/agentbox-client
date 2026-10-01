@@ -125,7 +125,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         guard let workspace else { return }
         let key = "\(workspace.id)/\(project.name)"
         if let existing = terminals[key] {
-            view.window?.makeFirstResponder(existing.view)
+            terminalGrid.select(existing)
             return
         }
         let terminal = terminalGrid.add(client: client, workspace: workspace, project: project)
