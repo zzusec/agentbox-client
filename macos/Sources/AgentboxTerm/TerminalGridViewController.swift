@@ -95,6 +95,7 @@ final class TerminalGridViewController: NSViewController {
         selected = terminal
         terminal.isActive = true
         container.subviews.forEach { $0.removeFromSuperview() }
+        terminal.view.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(terminal.view)
         NSLayoutConstraint.activate([
             terminal.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -148,6 +149,7 @@ final class TerminalGridViewController: NSViewController {
             chip.isSelected = terminal === selected
             chip.onSelect = { [weak self] in self?.select(terminal) }
             chip.onClose = { [weak self] in self?.remove(terminal) }
+            chip.translatesAutoresizingMaskIntoConstraints = false
             tabBar.addArrangedSubview(chip)
         }
         updateEmptyState()
