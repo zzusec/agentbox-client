@@ -61,6 +61,17 @@ final class AgentboxClient {
         return try JSONDecoder().decode(RemoteProject.self, from: data)
     }
 
+    /// Server-side project deletion: the handler moves the workspace directory
+    /// into a trash folder rather than unlinking it outright.
+    func deleteProject(_ project: RemoteProject, in workspace: Workspace) async throws {
+        let url = Self.endpoint(
+            server,
+            "api/sessions/\(escaped(workspace.id))/projects/\(escaped(project.id))"
+        )
+        let request = authorizedRequest(url: url, method: "DELETE")
+        _ = try await Self.perform(request, token: token)
+    }
+
     func upload(file: URL, workspace: Workspace, project: String) async throws -> String? {
         let boundary = "Agentbox-\(UUID().uuidString)"
         let multipart = try MultipartFile(file: file, boundary: boundary)

@@ -6,6 +6,9 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     var onChooseLocalRoot: (() -> Void)?
     var onCreateProject: (() -> Void)?
     var onRenameProject: ((RemoteProject) -> Void)?
+    var onOpenProject: ((RemoteProject) -> Void)?
+    var onCopyProjectPath: ((RemoteProject) -> Void)?
+    var onDeleteProject: ((RemoteProject) -> Void)?
 
     private let workspacePicker = NSPopUpButton()
     private let projectTable = NSTableView()
@@ -22,16 +25,29 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        let renameItem = NSMenuItem(title: "重命名…", action: #selector(renameClicked), keyEquivalent: "")
-        renameItem.target = self
-        projectMenu.addItem(renameItem)
         projectMenu.delegate = self
         projectTable.menu = projectMenu
+    }
+
+    @objc private func openClicked() {
+        guard let menuProject else { return }
+        onOpenProject?(menuProject)
+    }
+
+    @objc private func copyPathClicked() {
+        guard let menuProject else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(menuProject.path, forType: .string)
     }
 
     @objc private func renameClicked() {
         guard let menuProject else { return }
         onRenameProject?(menuProject)
+    }
+
+    @objc private func deleteClicked() {
+        guard let menuProject else { return }
+        onDeleteProject?(menuProject)
     }
 
     override func loadView() {
@@ -380,13 +396,30 @@ private final class ProjectCellView: NSTableCellView {
 
 extension SidebarViewController: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
         let row = projectTable.clickedRow
-        if row >= 0, row < projects.count {
-            menuProject = projects[row]
-            menu.items.first?.isEnabled = true
-        } else {
-            menuProject = nil
-            menu.items.first?.isEnabled = false
+        guard row >= 0, row < projects.count else { return }
+        let project = projects[row]
+        menuProject = project
+
+        func item(_ title: String, _ symbol: String, _ action: Selector, red: Bool = false) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.image = NativeTheme.symbol(symbol, size: 13, weight: .medium)
+            if red {
+                item.attributedTitle = NSAttributedString(
+                    string: title,
+                    attributes: [.foregroundColor: NSColor.systemRed]
+                )
+            }
+            return item
         }
+
+        menu.addItem(item("打开终端", "play", #selector(openClicked)))
+        menu.addItem(item("复制路径", "doc.on.doc", #selector(copyPathClicked)))
+        menu.addItem(.separator())
+        menu.addItem(item("重命名…", "pencil", #selector(renameClicked)))
+        menu.addItem(.separator())
+        menu.addItem(item("删除…", "trash", #selector(deleteClicked), red: true))
     }
 }

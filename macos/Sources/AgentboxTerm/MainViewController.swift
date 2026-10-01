@@ -67,6 +67,16 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         sidebar.onRenameProject = { [weak self] project in
             self?.renameProject(project)
         }
+        sidebar.onOpenProject = { [weak self] project in
+            self?.open(project)
+        }
+        sidebar.onCopyProjectPath = { project in
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(project.path, forType: .string)
+        }
+        sidebar.onDeleteProject = { [weak self] project in
+            self?.deleteProject(project)
+        }
 
         Task { @MainActor in
             do {
@@ -184,30 +194,23 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
 
     private func createProject() {
         guard let workspace else { return }
-        let alert = NSAlert()
-        alert.messageText = "新建项目"
-        alert.informativeText = "项目会在服务器 /workspace 下创建，并同步到本地同步目录。"
-        alert.addButton(withTitle: "创建")
-        alert.addButton(withTitle: "取消")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        field.placeholderString = "项目名称"
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return }
-        Task { @MainActor in
-            do {
-                _ = try await client.createProject(name: name, in: workspace)
-                sidebar.setProjects(try await client.projects(in: workspace))
-            } catch {
-                let errorAlert = NSAlert()
-                errorAlert.messageText = "创建项目失败"
-                errorAlert.informativeText = error.localizedDescription
-                errorAlert.alertStyle = .warning
-                errorAlert.runModal()
+        let sheet = NewProjectViewController()
+        sheet.onCreate = { [weak self] name in
+            guard let self else { return }
+            Task { @MainActor in
+                do {
+                    _ = try await self.client.createProject(name: name, in: workspace)
+                    self.sidebar.setProjects(try await self.client.projects(in: workspace))
+                } catch {
+                    let errorAlert = NSAlert()
+                    errorAlert.messageText = "创建项目失败"
+                    errorAlert.informativeText = error.localizedDescription
+                    errorAlert.alertStyle = .warning
+                    errorAlert.runModal()
+                }
             }
         }
+        presentAsSheet(sheet)
     }
 
     /// Right-click rename: stop the sync engine, move the local folder, rename
@@ -316,6 +319,64 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     private func startSyncIfConfigured(_ workspace: Workspace, localRoot: URL?) {
         guard let localRoot else { return }
         startSync(workspace, localRoot: localRoot)
+    }
+
+    /// Right-click delete: stops syncing, deletes on the server (which trashes
+    /// the server-side directory), moves the local folder to the macOS Trash
+    /// and closes the project's terminal tab.
+    private func deleteProject(_ project: RemoteProject) {
+        guard let workspace, workspace.id == self.workspace?.id else { return }
+        let alert = NSAlert()
+        alert.messageText = "删除项目 \(project.name)？"
+        alert.informativeText = "服务器目录会移入回收站；本地同步目录中的对应文件夹会移到废纸篓；相关终端标签会关闭。"
+        alert.addButton(withTitle: "删除")
+        alert.addButton(withTitle: "取消")
+        alert.alertStyle = .warning
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        Task { @MainActor in
+            var localRootURL: URL?
+            if let root = UserDefaults.standard.string(forKey: localRootKey(workspace)), !root.isEmpty {
+                localRootURL = URL(fileURLWithPath: root, isDirectory: true)
+            }
+            syncManager?.stop()
+            syncManager = nil
+            defer { sidebar.setStatus("双击项目进入 Claude") }
+
+            do {
+                try await client.deleteProject(project, in: workspace)
+            } catch {
+                let failure = NSAlert()
+                failure.messageText = "服务器删除失败"
+                failure.informativeText = error.localizedDescription
+                failure.alertStyle = .warning
+                failure.runModal()
+                startSyncIfConfigured(workspace, localRoot: localRootURL)
+                return
+            }
+
+            let key = "\(workspace.id)/\(project.name)"
+            if let stale = terminals.removeValue(forKey: key) {
+                terminalGrid.remove(stale)
+            }
+            if let localRootURL {
+                let folder = localRootURL.appendingPathComponent(project.name)
+                var isDirectory: ObjCBool = false
+                if FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                    do {
+                        try FileManager.default.trashItem(at: folder, resultingItemURL: nil)
+                    } catch {
+                        sidebar.setStatus("本地文件夹移入废纸篓失败：\(error.localizedDescription)")
+                    }
+                }
+            }
+            startSyncIfConfigured(workspace, localRoot: localRootURL)
+            do {
+                sidebar.setProjects(try await client.projects(in: workspace))
+            } catch {
+                sidebar.setStatus("读取项目失败：\(error.localizedDescription)")
+            }
+        }
     }
 
     private func askRenamePolicy() -> String? {
