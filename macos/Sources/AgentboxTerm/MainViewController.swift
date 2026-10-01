@@ -653,9 +653,23 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         // the button looked broken.
         guard let root = requireLocalRoot(for: workspace, policy: policy) else { return }
         let label = ProjectSyncSetting.policyLabel(policy)
-        let overwrite = policy == "server"
-            ? "服务器上没有的本地文件会被删除，服务器上的文件会全部下载下来。"
-            : "本地文件会全部上传，服务器上多出的文件会被删除。"
+        // An empty local directory can only mean "download": the engine forces
+        // the server side when there is nothing local to win with. The opposite
+        // — an unrelated non-empty folder — would overwrite the server project
+        // and delete everything it does not have, so say which one this is.
+        let localDir = effectiveProjectDir(project, in: workspace)
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+        let localIsEmpty = (localDir.flatMap {
+            try? FileManager.default.contentsOfDirectory(atPath: $0.path)
+        } ?? []).isEmpty
+        let overwrite: String
+        if localIsEmpty {
+            overwrite = "本地目录还是空的，这次只会把服务器上的文件下载下来，不会删任何东西。"
+        } else if policy == "server" {
+            overwrite = "服务器上没有的本地文件会被删除，服务器上的文件会全部下载下来。"
+        } else {
+            overwrite = "本地文件会全部上传，服务器上多出的文件会被删除。"
+        }
         let alert = NSAlert()
         alert.messageText = "立即以\(policy == "server" ? "服务器" : "本地")为准全量同步「\(project.name)」？"
         alert.informativeText = overwrite
@@ -663,7 +677,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             + "同时把该项目的同步方式记为「\(label)」。"
         alert.addButton(withTitle: "立即同步")
         alert.addButton(withTitle: "取消")
-        alert.alertStyle = .warning
+        alert.alertStyle = localIsEmpty ? .informational : .warning
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         updateProjectSetting(for: workspace, project: project) { setting in
