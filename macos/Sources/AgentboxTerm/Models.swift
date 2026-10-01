@@ -44,6 +44,28 @@ struct RemoteProject: Decodable, Identifiable {
     }
 }
 
+/// Per-project sync overrides, keyed by project ID so a rename keeps them.
+/// An absent or empty field means the workspace default applies: the project
+/// syncs to `<local root>/<project name>` under the workspace policy.
+struct ProjectSyncSetting: Equatable {
+    var localDir: String?
+    var policy: String?
+
+    var isEmpty: Bool {
+        (localDir ?? "").isEmpty && (policy ?? "").isEmpty
+    }
+
+    /// The sync policy only takes effect when a project has to build a fresh
+    /// baseline, so the UI has to say so rather than implying a live switch.
+    static func policyLabel(_ policy: String?) -> String {
+        switch policy {
+        case "server": return "以服务器为准"
+        case "local": return "以本地为准"
+        default: return "跟随工作空间"
+        }
+    }
+}
+
 struct UploadResponse: Decodable {
     let files: Int
     let mode: String

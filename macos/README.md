@@ -33,7 +33,32 @@ does not fetch GitHub dependencies.
 6. Click a project to attach to its Claude session.
 
 The local root maps directly to the remote `/workspace`: remote project
-`/workspace/demo` maps to `<local root>/demo`.
+`/workspace/demo` maps to `<local root>/demo` by default. Right-click a project
+(or use the new-project sheet) to point it at its own directory instead, and to
+choose its sync mode.
+
+## Per-project sync settings
+
+Both the new-project sheet and a project's right-click menu carry the same three
+settings:
+
+- **项目名称 / name** — creating uses the name field; right-click offers
+  `修改项目名称…`, which renames the server directory and the classic local
+  folder together.
+- **本地工作空间 / local workspace** — `修改本地工作空间…` points one project at
+  any local directory. Overrides are keyed by project ID, so renaming a project
+  keeps them. Picking the classic `<local root>/<name>` again clears the
+  override.
+- **同步方式 / sync mode** — `修改同步方式` picks which side wins when the
+  project has to build a **fresh baseline**: 跟随工作空间, 以服务器为准 or
+  以本地为准. This is not a live switch — routine syncs keep three-way merging
+  and pause on real conflicts.
+
+Changing a project's directory discards that project's baseline on purpose. The
+engine records the directory each baseline describes and ignores a baseline
+whose directory no longer matches; reusing the old one would read as "every file
+was deleted locally" and wipe the server copy. The next sync therefore
+bootstraps from the chosen sync mode.
 
 ## Terminal settings
 

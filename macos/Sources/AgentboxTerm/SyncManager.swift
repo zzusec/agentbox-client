@@ -7,14 +7,22 @@ final class SyncManager {
     private let workspace: Workspace
     private let localRoot: URL
     private let initialPolicy: String
+    private let projectSettings: [String: ProjectSyncSetting]
     private var process: Process?
     private var output: Pipe?
 
-    init(client: AgentboxClient, workspace: Workspace, localRoot: URL, initialPolicy: String) {
+    init(
+        client: AgentboxClient,
+        workspace: Workspace,
+        localRoot: URL,
+        initialPolicy: String,
+        projectSettings: [String: ProjectSyncSetting] = [:]
+    ) {
         self.client = client
         self.workspace = workspace
         self.localRoot = localRoot
         self.initialPolicy = initialPolicy
+        self.projectSettings = projectSettings
     }
 
     func start() {
@@ -86,10 +94,31 @@ final class SyncManager {
             "interval_seconds": 1,
             "projects": [],
             "initial_policy": initialPolicy,
+            "project_settings": encodedProjectSettings(),
         ]
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: path, options: [.atomic])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
         return path
+    }
+
+    /// Per-project overrides, keyed by project ID (which survives a rename).
+    /// Projects with neither a directory nor a policy are left out so the
+    /// classic `<local root>/<project name>` layout keeps applying.
+    private func encodedProjectSettings() -> [String: [String: String]] {
+        var encoded: [String: [String: String]] = [:]
+        for (id, setting) in projectSettings {
+            var entry: [String: String] = [:]
+            if let dir = setting.localDir, !dir.isEmpty {
+                entry["local_dir"] = dir
+            }
+            if let policy = setting.policy, !policy.isEmpty {
+                entry["initial_policy"] = policy
+            }
+            if !entry.isEmpty {
+                encoded[id] = entry
+            }
+        }
+        return encoded
     }
 }

@@ -6,9 +6,13 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     var onChooseLocalRoot: (() -> Void)?
     var onCreateProject: (() -> Void)?
     var onRenameProject: ((RemoteProject) -> Void)?
+    var onChangeProjectLocalDir: ((RemoteProject) -> Void)?
+    var onChangeProjectPolicy: ((RemoteProject, String?) -> Void)?
     var onOpenProject: ((RemoteProject) -> Void)?
     var onCopyProjectPath: ((RemoteProject) -> Void)?
     var onDeleteProject: ((RemoteProject) -> Void)?
+    /// Current per-project sync policy, for the checkmark in the submenu.
+    var projectPolicyForDisplay: ((RemoteProject) -> String?)?
 
     private let workspacePicker = NSPopUpButton()
     private let projectTable = NSTableView()
@@ -43,6 +47,18 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     @objc private func renameClicked() {
         guard let menuProject else { return }
         onRenameProject?(menuProject)
+    }
+
+    @objc private func changeLocalDirClicked() {
+        guard let menuProject else { return }
+        onChangeProjectLocalDir?(menuProject)
+    }
+
+    @objc private func changePolicyClicked(_ sender: NSMenuItem) {
+        guard let menuProject else { return }
+        // The tag carries the policy; 0 is "follow the workspace".
+        let policy = sender.tag == 0 ? nil : (sender.tag == 1 ? "server" : "local")
+        onChangeProjectPolicy?(menuProject, policy)
     }
 
     @objc private func deleteClicked() {
@@ -399,7 +415,14 @@ extension SidebarViewController: NSMenuDelegate {
         menu.removeAllItems()
         let row = projectTable.clickedRow
         guard row >= 0, row < projects.count else { return }
-        let project = projects[row]
+        populate(menu, with: projects[row])
+    }
+
+    /// Builds the right-click menu for one project. Kept separate from
+    /// menuNeedsUpdate, which can only run under a real click, so the
+    /// contents and the actions stay reachable from the smoke checks.
+    func populate(_ menu: NSMenu, with project: RemoteProject) {
+        menu.removeAllItems()
         menuProject = project
 
         func item(_ title: String, _ symbol: String, _ action: Selector, red: Bool = false) -> NSMenuItem {
@@ -418,8 +441,32 @@ extension SidebarViewController: NSMenuDelegate {
         menu.addItem(item("打开终端", "play", #selector(openClicked)))
         menu.addItem(item("复制路径", "doc.on.doc", #selector(copyPathClicked)))
         menu.addItem(.separator())
-        menu.addItem(item("重命名…", "pencil", #selector(renameClicked)))
+        menu.addItem(item("修改项目名称…", "pencil", #selector(renameClicked)))
+        menu.addItem(item("修改本地工作空间…", "folder", #selector(changeLocalDirClicked)))
+        menu.addItem(policyItem(for: project))
         menu.addItem(.separator())
         menu.addItem(item("删除…", "trash", #selector(deleteClicked), red: true))
+    }
+
+    /// "修改同步方式" as a submenu, with the project's current choice checked.
+    private func policyItem(for project: RemoteProject) -> NSMenuItem {
+        let current = projectPolicyForDisplay?(project) ?? nil
+        let parent = NSMenuItem(title: "修改同步方式", action: nil, keyEquivalent: "")
+        parent.image = NativeTheme.symbol("arrow.triangle.2.circlepath", size: 13, weight: .medium)
+        let submenu = NSMenu()
+        let options: [(String, Int, String?)] = [
+            ("跟随工作空间", 0, nil),
+            ("以服务器为准", 1, "server"),
+            ("以本地为准", 2, "local"),
+        ]
+        for (title, tag, policy) in options {
+            let entry = NSMenuItem(title: title, action: #selector(changePolicyClicked(_:)), keyEquivalent: "")
+            entry.target = self
+            entry.tag = tag
+            entry.state = current == policy ? .on : .off
+            submenu.addItem(entry)
+        }
+        parent.submenu = submenu
+        return parent
     }
 }

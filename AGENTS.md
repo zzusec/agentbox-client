@@ -34,6 +34,8 @@
 | `internal/archivex` | 上传压缩包解压（防 zip-slip/符号链接/解压炸弹）与工作区 zip 下载。 |
 | `internal/tunnel` | yamux 隧道协议、白名单、端口映射。 |
 | `internal/linkapp` | abox-link 客户端实现：配置、面板、守护/自启、重连监督器；`static/` 是面板前端，随 `cmd/abox-link` 独立 `go:embed`。 |
+| `internal/syncclient` | 项目同步的本地侧：清单/基线、三路合并（`BuildPlan`）、每项目目标（`ProjectTarget`）与租约内的上传下载。 |
+| `cmd/abox-sync` | 同步侧车进程，Mac 客户端随包分发（`Contents/Resources/abox-sync`）：读 JSON 配置轮询同步。 |
 | `internal/web` | 嵌入前端静态资源（`static/js` 是 TS 编译产物）；`AGENTBOX_WEB_DIR` 可改为磁盘热加载。 |
 | `web/src` | 主控制台前端 TypeScript 源码，`npm run build` 编译到 `internal/web/static/js`。 |
 | `images/agent` | 会话容器镜像 Dockerfile；内置 Claude Code、Codex CLI、tmux、claude-hud。 |
@@ -582,6 +584,16 @@ data/
   env 镜像进 tmux 全局环境（隧道变量缺失时 `-gu` 清除）——否则「会话先开、隧道后连」时
   终端里的 agent 永远看不到代理变量。运行中的窗格改不了，只能新开窗口或重启 agent。
 - 端口映射按来源 IP 鉴权：只有属主用户自己的容器（和宿主机）能连映射端口。
+
+### 项目同步（abox-sync）
+
+- 服务端只认项目（`sync_projects`，按空间隔离，租约串行写）；本地侧由 Mac 客户端随包分发的 `abox-sync` 轮询（`interval_seconds`，当前 1 秒）。服务端用 stat 走查签名缓存清单，`If-Revision` 命中直接回 204，客户端复用上次的远端清单——这是把轮询降到 1 秒的前提。
+- 配置文件由 Mac 客户端每次启动同步时重写（`~/Library/Application Support/agentbox-client/sync-<session>.json`，0600），是机器写机器读的：`local_root` 是工作空间本地根，`project_settings` 按**项目 ID**（改名不变）给单个项目覆盖 `local_dir` 与 `initial_policy`，缺省即经典布局 `local_root/项目名` + 工作空间级 `initial_policy`。
+- `local_dir` 必须是绝对路径，且不能是文件系统根、也不能是 `local_root` 的祖先（那会把基线目录和别的项目一起上传进这一个项目）。`CheckProjectDir` 是唯一的校验入口，`abox-sync` 启动时先验一遍，引擎每次同步再验一遍。
+- **基线按目录作废**：`<local_root>/.agentbox-sync/<项目ID>.json` 里存的是 `baseRecord{local_dir, manifest}`，不是裸 `Manifest`。读取时记录的目录与当前目录不一致就当没有基线。这一条是防数据丢失的关键——换了目录还沿用旧基线，会读成「本地全被删了」，然后按 `ActionDeleteRemote` 把服务器文件删掉。旧格式（裸 Manifest）只在项目仍位于 `local_root/项目名` 时才被信任，否则同样作废。
+- 因此改目录/改名的下一次同步是**重新建立基线**，走 `initial_policy`：内容两边一致时 `manifestsEqual` 直接短路、无事发生；两边都有内容且不一致才需要明确的策略，否则报 `InitialConflictError` 并暂停。日常同步仍是三路合并，真冲突暂停而非自动覆盖。
+- `initial_policy` 只在建基线时生效，不是「持续以某侧为准」的开关——不要把它当成能自动解决日常冲突的模式。
+- Mac 侧每项目设置存在 `UserDefaults`（`ProjectSyncStore`，目录与策略两个字典分开存，避免半截写丢另一半），键是项目 ID；「跟随工作空间」= 条目被删掉，而不是存空值。
 
 ## 代码约定与注意事项
 

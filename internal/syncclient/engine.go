@@ -68,23 +68,38 @@ func (e *ConflictError) Error() string {
 		e.Project, len(e.Paths), strings.Join(e.Paths, ", "))
 }
 
-func (e *Engine) SyncProject(
-	ctx context.Context,
-	project Project,
-	localRoot string,
-	initialPolicy string,
-) (SyncResult, error) {
+// ProjectTarget is one project's resolved sync target: where its local
+// directory lives and which side wins if it has to build a fresh baseline.
+type ProjectTarget struct {
+	Project Project
+	// LocalDir is the absolute local directory mapped to this project.
+	// Callers keeping the classic layout pass filepath.Join(localRoot, name).
+	LocalDir string
+	// StateRoot holds the .agentbox-sync baseline directory. It stays the
+	// workspace local root no matter where the project itself lives, so
+	// moving one project does not orphan every other project's baseline.
+	StateRoot string
+	// InitialPolicy decides which side wins when the project has no usable
+	// baseline and both sides have content: "local" or "server". Empty means
+	// "ask the caller" and surfaces as an InitialConflictError.
+	InitialPolicy string
+}
+
+func (e *Engine) SyncProject(ctx context.Context, target ProjectTarget) (SyncResult, error) {
+	project := target.Project
 	if e.Client == nil {
 		return SyncResult{}, errors.New("sync client is nil")
 	}
 	if e.DeviceID == "" {
 		return SyncResult{}, errors.New("device_id is required")
 	}
-	localProject := filepath.Join(localRoot, project.Name)
-	if err := ensureSafeProjectPath(localRoot, localProject); err != nil {
+	localProject := target.LocalDir
+	if err := CheckProjectDir(localProject, target.StateRoot); err != nil {
 		return SyncResult{}, err
 	}
-	base, hasBase, err := loadBase(localRoot, project.ID, localProject)
+	base, hasBase, err := loadBase(
+		target.StateRoot, project.ID, localProject, classicProjectDir(target.StateRoot, project),
+	)
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -118,7 +133,7 @@ func (e *Engine) SyncProject(
 
 	var plan Plan
 	if !hasBase {
-		plan, err = bootstrapPlan(project.Name, initialPolicy, local, remote)
+		plan, err = bootstrapPlan(project.Name, target.InitialPolicy, local, remote)
 	} else {
 		plan = BuildPlan(Entries(base), Entries(local), Entries(remote))
 	}
@@ -130,7 +145,7 @@ func (e *Engine) SyncProject(
 			&ConflictError{Project: project.Name, Paths: plan.Conflicts}
 	}
 	if len(plan.Actions) == 0 {
-		if err := saveBase(localRoot, project.ID, remote); err != nil {
+		if err := saveBase(target.StateRoot, project.ID, localProject, remote); err != nil {
 			return SyncResult{}, err
 		}
 		e.rememberRemote(project.ID, remote)
@@ -161,7 +176,7 @@ func (e *Engine) SyncProject(
 	}
 	remote.ServerRevision = leaseRawRevision
 	if !hasBase {
-		plan, err = bootstrapPlan(project.Name, initialPolicy, local, remote)
+		plan, err = bootstrapPlan(project.Name, target.InitialPolicy, local, remote)
 	} else {
 		plan = BuildPlan(Entries(base), Entries(local), Entries(remote))
 	}
@@ -173,7 +188,7 @@ func (e *Engine) SyncProject(
 			&ConflictError{Project: project.Name, Paths: plan.Conflicts}
 	}
 	if len(plan.Actions) == 0 {
-		if err := saveBase(localRoot, project.ID, remote); err != nil {
+		if err := saveBase(target.StateRoot, project.ID, localProject, remote); err != nil {
 			return SyncResult{}, err
 		}
 		e.rememberRemote(project.ID, remote)
@@ -204,7 +219,7 @@ func (e *Engine) SyncProject(
 	if len(verify.Conflicts) != 0 || len(verify.Actions) != 0 {
 		return SyncResult{}, errors.New("同步完成后本地和服务器仍不一致")
 	}
-	if err := saveBase(localRoot, project.ID, finalRemote); err != nil {
+	if err := saveBase(target.StateRoot, project.ID, localProject, finalRemote); err != nil {
 		return SyncResult{}, err
 	}
 	e.rememberRemote(project.ID, finalRemote)
@@ -374,6 +389,38 @@ func ensureSafeProjectPath(root, target string) error {
 	return nil
 }
 
+// classicProjectDir is where a project lives when it has no explicit local
+// directory. It is still needed after per-project directories exist, because
+// a baseline written before that feature describes exactly this path.
+func classicProjectDir(stateRoot string, project Project) string {
+	return filepath.Join(stateRoot, project.Name)
+}
+
+// CheckProjectDir rejects project directories that would sync something far
+// wider than the user meant. StateRoot is refused as an ancestor because the
+// baseline directory and every other project live under it, so pointing a
+// project at a parent of StateRoot would upload the whole workspace into one
+// project. Callers validate with it up front so a bad override fails loudly
+// instead of silently syncing the wrong tree.
+func CheckProjectDir(dir, stateRoot string) error {
+	if dir == "" {
+		return errors.New("project directory is required")
+	}
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("project directory must be absolute: %s", dir)
+	}
+	clean := filepath.Clean(dir)
+	if clean == string(filepath.Separator) {
+		return fmt.Errorf("refusing to sync the filesystem root: %s", dir)
+	}
+	if stateRoot != "" {
+		if rel, err := filepath.Rel(clean, filepath.Clean(stateRoot)); err == nil && filepath.IsLocal(rel) {
+			return fmt.Errorf("project directory %s contains the sync root %s", dir, stateRoot)
+		}
+	}
+	return nil
+}
+
 func safeProjectPath(root, rel string) (string, error) {
 	rel = filepath.Clean(filepath.FromSlash(rel))
 	if rel == "." || !filepath.IsLocal(rel) {
@@ -422,40 +469,74 @@ func writeLocalFile(target string, body io.Reader, mode os.FileMode, modified st
 	return nil
 }
 
-func stateDir(localRoot string) string {
-	return filepath.Join(localRoot, ".agentbox-sync")
+func stateDir(stateRoot string) string {
+	return filepath.Join(stateRoot, ".agentbox-sync")
 }
 
-func basePath(localRoot, projectID string) string {
-	return filepath.Join(stateDir(localRoot), projectID+".json")
+func basePath(stateRoot, projectID string) string {
+	return filepath.Join(stateDir(stateRoot), projectID+".json")
 }
 
-func loadBase(localRoot, projectID, localProject string) (Manifest, bool, error) {
-	raw, err := os.ReadFile(basePath(localRoot, projectID))
+// baseRecord is what actually lands in <StateRoot>/.agentbox-sync/<id>.json.
+// Recording the directory it describes is what makes a moved project safe:
+// the old baseline lists files under the previous path, so reusing it would
+// read as "every file was deleted locally" and wipe the server copy.
+type baseRecord struct {
+	LocalDir string   `json:"local_dir"`
+	Manifest Manifest `json:"manifest"`
+}
+
+// loadBase returns the baseline for a project, or hasBase=false when the
+// baseline describes a different directory than the one being synced now.
+// Files written before baseRecord existed hold a bare Manifest and can only
+// be trusted while the project still sits at the classic localRoot/name path.
+func loadBase(stateRoot, projectID, localDir, classicDir string) (Manifest, bool, error) {
+	raw, err := os.ReadFile(basePath(stateRoot, projectID))
 	if os.IsNotExist(err) {
 		return Manifest{}, false, nil
 	}
 	if err != nil {
 		return Manifest{}, false, err
 	}
-	var manifest Manifest
-	if err := json.Unmarshal(raw, &manifest); err != nil {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &probe); err != nil {
 		return Manifest{}, false, fmt.Errorf("parse sync base: %w", err)
 	}
-	filtered, err := FilterManifest(manifest, localProject)
+	if _, ok := probe["manifest"]; ok {
+		var record baseRecord
+		if err := json.Unmarshal(raw, &record); err != nil {
+			return Manifest{}, false, fmt.Errorf("parse sync base: %w", err)
+		}
+		if record.LocalDir != localDir {
+			return Manifest{}, false, nil
+		}
+		filtered, err := FilterManifest(record.Manifest, localDir)
+		if err != nil {
+			return Manifest{}, false, err
+		}
+		return filtered, true, nil
+	}
+	var legacy Manifest
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		return Manifest{}, false, fmt.Errorf("parse sync base: %w", err)
+	}
+	if localDir != classicDir {
+		return Manifest{}, false, nil
+	}
+	filtered, err := FilterManifest(legacy, localDir)
 	if err != nil {
 		return Manifest{}, false, err
 	}
 	return filtered, true, nil
 }
 
-func saveBase(localRoot, projectID string, manifest Manifest) error {
-	dir := stateDir(localRoot)
+func saveBase(stateRoot, projectID, localDir string, manifest Manifest) error {
+	dir := stateDir(stateRoot)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	target := basePath(localRoot, projectID)
-	raw, err := json.MarshalIndent(manifest, "", "  ")
+	target := basePath(stateRoot, projectID)
+	raw, err := json.MarshalIndent(baseRecord{LocalDir: localDir, Manifest: manifest}, "", "  ")
 	if err != nil {
 		return err
 	}

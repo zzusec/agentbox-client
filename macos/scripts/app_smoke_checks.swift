@@ -402,10 +402,148 @@ struct AppSmokeChecks {
         window.close()
     }
 
+    /// Per-project sync settings: the store keeps directory and policy keyed
+    /// by project ID, the new-project sheet exposes all three fields, and the
+    /// sidebar's right-click menu reaches the same two actions.
+    @MainActor
+    static func projectSettingsChecks() {
+        let suite = "agentbox.smoke.project-sync"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        // Store round-trip, keyed by project ID so a rename keeps it.
+        precondition(ProjectSyncStore.settings(for: "w1", defaults: defaults).isEmpty)
+        ProjectSyncStore.update("w1", projectID: "p1", defaults: defaults) { $0.localDir = "/tmp/one" }
+        ProjectSyncStore.update("w1", projectID: "p2", defaults: defaults) { $0.policy = "server" }
+        var settings = ProjectSyncStore.settings(for: "w1", defaults: defaults)
+        precondition(settings["p1"]?.localDir == "/tmp/one")
+        precondition(settings["p1"]?.policy == nil, "a directory-only override must not invent a policy")
+        precondition(settings["p2"]?.policy == "server")
+        precondition(settings["p2"]?.localDir == nil, "a policy-only override must not invent a directory")
+        precondition(ProjectSyncStore.settings(for: "w2", defaults: defaults).isEmpty, "workspaces must not share overrides")
+
+        // Clearing every field drops the entry, so "follow the workspace"
+        // stays the default state instead of an explicit empty override.
+        ProjectSyncStore.update("w1", projectID: "p1", defaults: defaults) { $0.localDir = nil }
+        settings = ProjectSyncStore.settings(for: "w1", defaults: defaults)
+        precondition(settings["p1"] == nil, "an emptied override must disappear")
+        precondition(settings.count == 1)
+        ProjectSyncStore.remove("w1", projectID: "p2", defaults: defaults)
+        precondition(ProjectSyncStore.settings(for: "w1", defaults: defaults).isEmpty)
+
+        precondition(ProjectSyncSetting.policyLabel(nil) == "跟随工作空间")
+        precondition(ProjectSyncSetting.policyLabel("server") == "以服务器为准")
+        precondition(ProjectSyncSetting.policyLabel("local") == "以本地为准")
+
+        // New-project sheet: name, local workspace, sync mode.
+        let sheet = NewProjectViewController()
+        sheet.localRoot = "/tmp/agentbox-root"
+        sheet.loadViewIfNeeded()
+        let all = views(in: sheet.view)
+        func field(_ id: NewProjectViewController.Field) -> NSView? {
+            all.first { $0.identifier?.rawValue == id.rawValue }
+        }
+        guard let nameField = field(.name) as? NSTextField,
+              let dirField = field(.localDir) as? NSTextField,
+              let policyPopup = field(.policy) as? NSPopUpButton,
+              let createButton = field(.create) as? NSButton else {
+            preconditionFailure("new-project sheet is missing name, local workspace, sync mode or create")
+        }
+        precondition(
+            policyPopup.itemArray.map(\.title) == ["跟随工作空间", "以服务器为准", "以本地为准"],
+            "unexpected sync modes: \(policyPopup.itemArray.map(\.title))"
+        )
+
+        func retype(_ value: String) {
+            nameField.stringValue = value
+            sheet.controlTextDidChange(
+                Notification(name: NSTextField.textDidChangeNotification, object: nameField)
+            )
+        }
+
+        // The default directory tracks the name until a directory is picked.
+        retype("demo")
+        precondition(
+            dirField.stringValue == "/tmp/agentbox-root/demo",
+            "default directory must follow the name, got \(dirField.stringValue)"
+        )
+        sheet.setCustomDir("/tmp/elsewhere/demo")
+        precondition(dirField.stringValue == "/tmp/elsewhere/demo")
+        retype("renamed")
+        precondition(dirField.stringValue == "/tmp/elsewhere/demo", "a picked directory must stop tracking the name")
+        sheet.setCustomDir(nil)
+        precondition(dirField.stringValue == "/tmp/agentbox-root/renamed", "clearing the pick must restore the default")
+
+        policyPopup.selectItem(at: 2)
+        // The button only wires to createClicked; invoking it here would call
+        // dismiss on a sheet that was never presented, which blocks.
+        precondition(
+            NSStringFromSelector(createButton.action!) == "createClicked",
+            "create button must run createClicked, got \(NSStringFromSelector(createButton.action!))"
+        )
+        let created = sheet.makeDraft()
+        precondition(created != nil, "the sheet must hand a draft back")
+        precondition(created!.name == "renamed")
+        precondition(created!.localDir == nil, "no pick means the classic layout, not an empty override")
+        precondition(created!.policy == "local")
+
+        // An invalid name is refused inline instead of producing a draft.
+        retype("bad/name")
+        precondition(sheet.makeDraft() == nil, "a name containing / must be rejected")
+        retype(".hidden")
+        precondition(sheet.makeDraft() == nil, "a leading dot must be rejected")
+        retype("renamed")
+        sheet.setCustomDir("/tmp/elsewhere/renamed")
+        let withDir = sheet.makeDraft()
+        precondition(withDir?.localDir == "/tmp/elsewhere/renamed")
+
+        // Right-click menu on an existing project.
+        let sidebar = SidebarViewController()
+        sidebar.loadViewIfNeeded()
+        let project = RemoteProject(id: "p1", name: "demo", path: "/workspace/demo")
+        var renamed: RemoteProject?
+        var changedDir: RemoteProject?
+        var changedPolicy: (project: RemoteProject, policy: String?)?
+        sidebar.onRenameProject = { renamed = $0 }
+        sidebar.onChangeProjectLocalDir = { changedDir = $0 }
+        sidebar.onChangeProjectPolicy = { changedPolicy = (project: $0, policy: $1) }
+        sidebar.projectPolicyForDisplay = { _ in "server" }
+
+        let menu = NSMenu()
+        sidebar.populate(menu, with: project)
+        let titles = menu.items.map(\.title)
+        precondition(titles.contains("修改项目名称…"), "menu must offer renaming: \(titles)")
+        precondition(titles.contains("修改本地工作空间…"), "menu must offer the local workspace: \(titles)")
+        precondition(titles.contains("修改同步方式"), "menu must offer the sync mode: \(titles)")
+
+        guard let policyItem = menu.items.first(where: { $0.title == "修改同步方式" }),
+              let policyMenu = policyItem.submenu else {
+            preconditionFailure("修改同步方式 must be a submenu")
+        }
+        precondition(policyMenu.items.map(\.title) == ["跟随工作空间", "以服务器为准", "以本地为准"])
+        precondition(
+            policyMenu.items.filter { $0.state == .on }.map(\.title) == ["以服务器为准"],
+            "the project's current policy must be checked"
+        )
+
+        let renameItem = menu.items.first { $0.title == "修改项目名称…" }!
+        precondition(NSApp.sendAction(renameItem.action!, to: renameItem.target, from: renameItem))
+        precondition(renamed?.id == "p1")
+        let dirItem = menu.items.first { $0.title == "修改本地工作空间…" }!
+        precondition(NSApp.sendAction(dirItem.action!, to: dirItem.target, from: dirItem))
+        precondition(changedDir?.id == "p1")
+        let localItem = policyMenu.items.first { $0.title == "以本地为准" }!
+        precondition(NSApp.sendAction(localItem.action!, to: localItem.target, from: localItem))
+        let call = changedPolicy
+        precondition(call != nil && call!.project.id == "p1" && call!.policy == "local")
+    }
+
     @MainActor
     static func check() async throws {
         themeChecks()
         settingsSheetChecks()
+        projectSettingsChecks()
         try await mouseEventsChecks()
         precondition(URLProtocol.registerClass(AppHTTPFixture.self))
         let client = AgentboxClient(server: URL(string: "https://agentbox-app-fixture.invalid")!, user: "synthetic-app-user", token: "synthetic-app-token")
@@ -474,7 +612,7 @@ struct AppSmokeChecks {
             controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
-        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle and directory cancellation")
+        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle and directory cancellation")
         if ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_KEEP_OPEN"] == "1" {
             try await Task.sleep(nanoseconds: 120_000_000_000)
         }

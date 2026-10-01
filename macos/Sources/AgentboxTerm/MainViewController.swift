@@ -67,6 +67,16 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         sidebar.onRenameProject = { [weak self] project in
             self?.renameProject(project)
         }
+        sidebar.onChangeProjectLocalDir = { [weak self] project in
+            self?.changeProjectLocalDir(project)
+        }
+        sidebar.onChangeProjectPolicy = { [weak self] project, policy in
+            self?.changeProjectPolicy(project, policy: policy)
+        }
+        sidebar.projectPolicyForDisplay = { [weak self] project in
+            guard let self, let workspace = self.workspace else { return nil }
+            return self.projectSettings(for: workspace)[project.id]?.policy
+        }
         sidebar.onOpenProject = { [weak self] project in
             self?.open(project)
         }
@@ -195,12 +205,24 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     private func createProject() {
         guard let workspace else { return }
         let sheet = NewProjectViewController()
-        sheet.onCreate = { [weak self] name in
+        sheet.localRoot = UserDefaults.standard.string(forKey: localRootKey(workspace))
+        sheet.onCreate = { [weak self] draft in
             guard let self else { return }
             Task { @MainActor in
                 do {
-                    _ = try await self.client.createProject(name: name, in: workspace)
+                    let created = try await self.client.createProject(name: draft.name, in: workspace)
+                    if draft.localDir != nil || draft.policy != nil {
+                        self.updateProjectSetting(for: workspace, project: created) { setting in
+                            setting.localDir = draft.localDir
+                            setting.policy = draft.policy
+                        }
+                    }
                     self.sidebar.setProjects(try await self.client.projects(in: workspace))
+                    // A new project has no baseline, so the chosen policy is
+                    // what decides the very first sync.
+                    if draft.localDir != nil || draft.policy != nil {
+                        self.restartSync(workspace)
+                    }
                 } catch {
                     let errorAlert = NSAlert()
                     errorAlert.messageText = "创建项目失败"
@@ -247,8 +269,10 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             defer { sidebar.setStatus("双击项目进入 Claude") }
 
             // Local folder first; roll it back if the server rejects the name.
+            // A project with its own local directory keeps it — only the
+            // classic <local root>/<name> layout has a folder to rename.
             var movedLocal = false
-            if let localRootURL {
+            if let localRootURL, projectSettings(for: workspace)[project.id]?.localDir?.isEmpty != false {
                 let oldURL = localRootURL.appendingPathComponent(project.name)
                 let newURL = localRootURL.appendingPathComponent(newName)
                 var isDirectory: ObjCBool = false
@@ -328,7 +352,9 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         guard let workspace, workspace.id == self.workspace?.id else { return }
         let alert = NSAlert()
         alert.messageText = "删除项目 \(project.name)？"
-        alert.informativeText = "服务器目录会移入回收站；本地同步目录中的对应文件夹会移到废纸篓；相关终端标签会关闭。"
+        alert.informativeText = "服务器目录会移入回收站；本地同步目录会移到废纸篓"
+            + (effectiveProjectDir(project, in: workspace).map { "（\($0)）" } ?? "")
+            + "；相关终端标签会关闭。"
         alert.addButton(withTitle: "删除")
         alert.addButton(withTitle: "取消")
         alert.alertStyle = .warning
@@ -359,12 +385,15 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             if let stale = terminals.removeValue(forKey: key) {
                 terminalGrid.remove(stale)
             }
-            if let localRootURL {
-                let folder = localRootURL.appendingPathComponent(project.name)
+            updateProjectSetting(for: workspace, project: project) { setting in
+                setting = ProjectSyncSetting()
+            }
+            if let folder = effectiveProjectDir(project, in: workspace) {
+                let folderURL = URL(fileURLWithPath: folder, isDirectory: true)
                 var isDirectory: ObjCBool = false
-                if FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                if FileManager.default.fileExists(atPath: folderURL.path, isDirectory: &isDirectory), isDirectory.boolValue {
                     do {
-                        try FileManager.default.trashItem(at: folder, resultingItemURL: nil)
+                        try FileManager.default.trashItem(at: folderURL, resultingItemURL: nil)
                     } catch {
                         sidebar.setStatus("本地文件夹移入废纸篓失败：\(error.localizedDescription)")
                     }
@@ -402,7 +431,8 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             client: client,
             workspace: workspace,
             localRoot: localRoot,
-            initialPolicy: policy
+            initialPolicy: policy,
+            projectSettings: projectSettings(for: workspace)
         )
         manager.onStatus = { [weak self] message in
             self?.sidebar.setStatus(message)
@@ -417,6 +447,105 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
 
     private func initialPolicyKey(_ workspace: Workspace) -> String {
         "agentbox.initial-policy.\(workspace.id)"
+    }
+
+    // MARK: Per-project sync settings
+
+    private func projectSettings(for workspace: Workspace) -> [String: ProjectSyncSetting] {
+        ProjectSyncStore.settings(for: workspace.id)
+    }
+
+    private func updateProjectSetting(
+        for workspace: Workspace,
+        project: RemoteProject,
+        _ change: (inout ProjectSyncSetting) -> Void
+    ) {
+        ProjectSyncStore.update(workspace.id, projectID: project.id, change)
+    }
+
+    /// The classic location for a project, i.e. the path the sync engine uses
+    /// when no override is stored.
+    private func classicProjectDir(_ project: RemoteProject, in workspace: Workspace) -> String? {
+        guard let root = UserDefaults.standard.string(forKey: localRootKey(workspace)), !root.isEmpty else {
+            return nil
+        }
+        return URL(fileURLWithPath: root, isDirectory: true)
+            .appendingPathComponent(project.name)
+            .standardizedFileURL.path
+    }
+
+    /// The directory a project syncs to right now, override or classic.
+    private func effectiveProjectDir(_ project: RemoteProject, in workspace: Workspace) -> String? {
+        if let dir = projectSettings(for: workspace)[project.id]?.localDir, !dir.isEmpty {
+            return dir
+        }
+        return classicProjectDir(project, in: workspace)
+    }
+
+    private func restartSync(_ workspace: Workspace) {
+        guard let root = UserDefaults.standard.string(forKey: localRootKey(workspace)), !root.isEmpty else {
+            return
+        }
+        startSync(workspace, localRoot: URL(fileURLWithPath: root, isDirectory: true))
+    }
+
+    /// Right-click "修改本地工作空间…": point one project at its own local
+    /// directory. The engine stores its baseline under the workspace root and
+    /// records which directory that baseline describes, so the new directory
+    /// starts from a fresh baseline instead of the old one reading as "every
+    /// file was deleted locally" and wiping the server copy.
+    private func changeProjectLocalDir(_ project: RemoteProject) {
+        guard let workspace, workspace.id == self.workspace?.id else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "使用此目录"
+        panel.message = "选择「\(project.name)」在本机的同步目录"
+        if let current = effectiveProjectDir(project, in: workspace) {
+            panel.directoryURL = URL(fileURLWithPath: current, isDirectory: true)
+        }
+        let handler: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            self?.applyProjectLocalDir(url, for: project, in: workspace)
+        }
+        guard let window = view.window else {
+            handler(panel.runModal())
+            return
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        panel.beginSheetModal(for: window, completionHandler: handler)
+    }
+
+    private func applyProjectLocalDir(_ url: URL, for project: RemoteProject, in workspace: Workspace) {
+        let chosen = url.standardizedFileURL.path
+        let wasCustom = projectSettings(for: workspace)[project.id]?.localDir?.isEmpty == false
+        // Picking the classic location again is the same as having no override.
+        let clearsOverride = chosen == classicProjectDir(project, in: workspace)
+        updateProjectSetting(for: workspace, project: project) { setting in
+            setting.localDir = clearsOverride ? nil : chosen
+        }
+        restartSync(workspace)
+        if clearsOverride && wasCustom {
+            sidebar.setStatus("\(project.name) 已改回工作空间目录：\(chosen)")
+        } else {
+            sidebar.setStatus("\(project.name) 同步目录已改为：\(chosen)")
+        }
+    }
+
+    /// Right-click "修改同步方式". The choice decides which side wins when the
+    /// project has to build a fresh baseline (a new project, a new local
+    /// directory, or a baseline that no longer matches the directory); routine
+    /// syncs keep three-way merging and pause on real conflicts.
+    private func changeProjectPolicy(_ project: RemoteProject, policy: String?) {
+        guard let workspace, workspace.id == self.workspace?.id else { return }
+        updateProjectSetting(for: workspace, project: project) { setting in
+            setting.policy = policy
+        }
+        restartSync(workspace)
+        sidebar.setStatus("\(project.name) 同步方式：\(ProjectSyncSetting.policyLabel(policy))")
     }
 
     private func chooseInitialPolicy(_ workspace: Workspace) -> String? {

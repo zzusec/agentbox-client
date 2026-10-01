@@ -20,16 +20,24 @@ import (
 	"agentbox/internal/syncclient"
 )
 
+// projectSetting overrides the workspace defaults for one project. The Mac
+// client writes these keyed by project ID, which survives a rename.
+type projectSetting struct {
+	LocalDir      string `json:"local_dir,omitempty"`
+	InitialPolicy string `json:"initial_policy,omitempty"`
+}
+
 type config struct {
-	Server          string   `json:"server"`
-	Token           string   `json:"token"`
-	SessionID       string   `json:"session_id"`
-	LocalRoot       string   `json:"local_root"`
-	DeviceID        string   `json:"device_id"`
-	DeviceName      string   `json:"device_name"`
-	InitialPolicy   string   `json:"initial_policy"`
-	Projects        []string `json:"projects"`
-	IntervalSeconds int      `json:"interval_seconds"`
+	Server          string                    `json:"server"`
+	Token           string                    `json:"token"`
+	SessionID       string                    `json:"session_id"`
+	LocalRoot       string                    `json:"local_root"`
+	DeviceID        string                    `json:"device_id"`
+	DeviceName      string                    `json:"device_name"`
+	InitialPolicy   string                    `json:"initial_policy"`
+	Projects        []string                  `json:"projects"`
+	ProjectSettings map[string]projectSetting `json:"project_settings,omitempty"`
+	IntervalSeconds int                       `json:"interval_seconds"`
 }
 
 func main() {
@@ -128,7 +136,13 @@ func syncOnce(
 		if !selected[project.Name] {
 			continue
 		}
-		result, err := engine.SyncProject(ctx, project, cfg.LocalRoot, cfg.InitialPolicy)
+		target := syncclient.ProjectTarget{
+			Project:       project,
+			LocalDir:      projectLocalDir(cfg, project),
+			StateRoot:     cfg.LocalRoot,
+			InitialPolicy: projectInitialPolicy(cfg, project),
+		}
+		result, err := engine.SyncProject(ctx, target)
 		if err != nil {
 			var conflicts *syncclient.ConflictError
 			if errors.As(err, &conflicts) {
@@ -142,6 +156,22 @@ func syncOnce(
 		}
 	}
 	return nil
+}
+
+// projectLocalDir resolves where a project syncs to. Without an override the
+// classic layout applies: the project name as a directory under local_root.
+func projectLocalDir(cfg config, project syncclient.Project) string {
+	if setting, ok := cfg.ProjectSettings[project.ID]; ok && setting.LocalDir != "" {
+		return expandPath(setting.LocalDir)
+	}
+	return filepath.Join(cfg.LocalRoot, project.Name)
+}
+
+func projectInitialPolicy(cfg config, project syncclient.Project) string {
+	if setting, ok := cfg.ProjectSettings[project.ID]; ok && setting.InitialPolicy != "" {
+		return setting.InitialPolicy
+	}
+	return cfg.InitialPolicy
 }
 
 func (c config) validate() error {
@@ -160,6 +190,17 @@ func (c config) validate() error {
 	info, err := os.Stat(expandPath(c.LocalRoot))
 	if err != nil || !info.IsDir() {
 		return fmt.Errorf("local_root is not a directory: %s", c.LocalRoot)
+	}
+	for id, setting := range c.ProjectSettings {
+		if setting.InitialPolicy != "" && setting.InitialPolicy != "local" && setting.InitialPolicy != "server" {
+			return fmt.Errorf("project %s: initial_policy must be local or server", id)
+		}
+		if setting.LocalDir == "" {
+			continue
+		}
+		if err := syncclient.CheckProjectDir(expandPath(setting.LocalDir), c.LocalRoot); err != nil {
+			return fmt.Errorf("project %s: %w", id, err)
+		}
 	}
 	return nil
 }
