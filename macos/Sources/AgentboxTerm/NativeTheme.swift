@@ -34,17 +34,19 @@ enum NativeTheme {
     }
 
     /// Creates a terminal font with an explicit CJK fallback cascade list.
-    /// Without this, Menlo alone cannot render Chinese/Japanese/Korean characters,
+    /// Without this, a Latin-only terminal font cannot render Chinese/Japanese/Korean characters,
     /// which appear as white block tofu glyphs.
     /// `postScriptName` picks the base family (settings picker); any family
-    /// that fails to resolve falls back to Menlo, then the system monospaced.
+    /// that fails to resolve falls back to Monaco, then the system monospaced.
     static func terminalFont(size: CGFloat = 13, postScriptName: String? = nil) -> NSFont {
+        // Monaco is the default terminal family (it matches the Apple Terminal
+        // profile this app is tuned to); SF Mono stands in if it is missing.
         let baseFont = postScriptName.flatMap { NSFont(name: $0, size: size) }
-            ?? NSFont(name: "Menlo-Regular", size: size)
+            ?? NSFont(name: "Monaco", size: size)
             ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
 
         // Build a cascade list of CJK-capable fonts so CoreText can find
-        // glyphs for characters not covered by Menlo.
+        // glyphs for characters not covered by the terminal font.
         let cascadeNames = [
             "PingFang SC",        // Simplified Chinese (macOS built-in)
             "PingFang TC",        // Traditional Chinese

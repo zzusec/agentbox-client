@@ -176,6 +176,33 @@ struct AppSmokeChecks {
         precondition(TerminalThemeManager.normalizedHex("#12345") == nil)
         precondition(TerminalThemeManager.normalizedHex("") == nil)
 
+        // Default scheme: the Apple Terminal "Clear Dark" palette extracted
+        // from this Mac's terminal profile. Guard the exact values, since a
+        // typo here would silently change what every user sees.
+        precondition(TerminalThemeManager.defaultSchemeID == "clear-dark")
+        precondition(TerminalThemeManager.current.id == TerminalThemeManager.defaultSchemeID)
+        let preset = TerminalThemeManager.schemes.first { $0.id == TerminalThemeManager.defaultSchemeID }!
+        precondition(preset.background == "#191D27")
+        precondition(preset.foreground == "#E0E0E0")
+        precondition(preset.cursor == "#E0E0E0")
+        precondition(
+            preset.ansi == ["#35424C", "#B45648", "#6CAA71", "#C4AC62",
+                            "#6D96B4", "#BD7BCD", "#7CCBCD", "#DEE5EB",
+                            "#465C6D", "#DF6C5A", "#79BE7E", "#E5C872",
+                            "#67B5ED", "#D389E5", "#84DDE0", "#E5EFF5"],
+            "Clear Dark palette drifted: \(preset.ansi)"
+        )
+        precondition(!preset.isLight, "Clear Dark is a dark scheme")
+        // Every preset must carry a full, well-formed 16-slot palette.
+        for scheme in TerminalThemeManager.schemes {
+            precondition(scheme.ansi.count == 16, "\(scheme.id) has \(scheme.ansi.count) ANSI slots")
+            precondition(
+                ([scheme.background, scheme.foreground, scheme.cursor] + scheme.ansi)
+                    .allSatisfy { TerminalThemeManager.normalizedHex($0) != nil },
+                "\(scheme.id) has a malformed colour"
+            )
+        }
+
         // Custom scheme: create from preset, round-trip through defaults,
         // mutate, and select.
         defaults.removeObject(forKey: customKey)
@@ -198,10 +225,16 @@ struct AppSmokeChecks {
         precondition(TerminalThemeManager.isLight(hex: "#FFFFFF"))
         precondition(!TerminalThemeManager.isLight(hex: "#000000"))
 
-        // Font family: unknown ids fall back to the first installed family.
-        precondition(TerminalThemeManager.installedFontFamilies.contains { $0.id == "menlo" })
+        // Font family: the default is Monaco, and an unknown stored id falls
+        // back to it rather than to whatever is listed first.
+        let installed = TerminalThemeManager.installedFontFamilies
+        precondition(
+            installed.contains { $0.id == TerminalThemeManager.defaultFontFamilyID },
+            "the default family must be installed on this machine"
+        )
+        precondition(TerminalThemeManager.defaultFontFamilyID == "monaco")
         defaults.set("not-a-font", forKey: familyKey)
-        precondition(TerminalThemeManager.fontFamily.id == "menlo")
+        precondition(TerminalThemeManager.fontFamily.id == TerminalThemeManager.defaultFontFamilyID)
         precondition(TerminalThemeManager.font().familyName != nil)
         defaults.set("monaco", forKey: familyKey)
         precondition(TerminalThemeManager.fontFamily.id == "monaco")
@@ -247,7 +280,7 @@ struct AppSmokeChecks {
         controller.loadViewIfNeeded()
         let all = views(in: controller.view)
         let cards = all.compactMap { $0 as? SchemeCardView }
-        precondition(cards.count == 7, "expected 6 presets + 1 custom card")
+        precondition(cards.count == 8, "expected 7 presets + 1 custom card")
         precondition(cards.last!.scheme.id == TerminalThemeManager.customSchemeID)
         let editor = all.compactMap { $0 as? CustomSchemeEditorView }.first!
         precondition(editor.isHidden, "editor must stay hidden while a preset is selected")

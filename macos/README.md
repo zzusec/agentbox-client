@@ -64,11 +64,15 @@ bootstraps from the chosen sync mode.
 
 The palette toolbar button opens the terminal settings sheet:
 
-- Color schemes: six presets plus a custom scheme. The custom card seeds from
-  the current preset and exposes background/foreground/cursor color wells and
-  hex fields for all 16 ANSI slots; every change applies to open terminals live.
+- Color schemes: seven presets plus a custom scheme. The default is `Clear Dark`,
+  taken verbatim from this Mac's Apple Terminal profile so the app matches the
+  terminal you already work in (that profile is translucent, so the stored
+  background `#191D27` is a touch darker than the composited screenshot). The
+  custom card seeds from the current preset and exposes
+  background/foreground/cursor color wells and hex fields for all 16 ANSI slots;
+  every change applies to open terminals live.
 - Font family and size: the family picker lists monospaced fonts installed on
-  this machine (Menlo by default); CJK glyphs fall back to PingFang and friends
+  this machine (Monaco by default); CJK glyphs fall back to PingFang and friends
   regardless of the family.
 - Mouse reporting has three modes: off (default; drag selects and copies),
   on (mouse events reach TUI apps like vim/tmux), and smart (reports like on,

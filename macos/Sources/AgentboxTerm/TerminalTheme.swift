@@ -75,7 +75,22 @@ enum TerminalThemeManager {
 
     static let customSchemeID = "custom"
 
+    /// Used when no scheme has been chosen yet, and as the fallback for an
+    /// unknown stored id. First in `schemes`, so the card grid leads with it.
+    static let defaultSchemeID = "clear-dark"
+
     static let schemes: [TerminalScheme] = [
+        // Extracted verbatim from this Mac's Apple Terminal "Clear Dark"
+        // profile (the startup window settings), so agentbox matches the
+        // terminal the user already works in. That profile is translucent
+        // (0.95 alpha over a blurred desktop); the values here are the
+        // configured colours, which is what an opaque window can honour.
+        TerminalScheme(
+            id: "clear-dark", name: "Clear Dark", detail: "深蓝底冷调，取自 Apple Terminal",
+            background: "#191D27", foreground: "#E0E0E0", cursor: "#E0E0E0",
+            ansi: ["#35424C", "#B45648", "#6CAA71", "#C4AC62", "#6D96B4", "#BD7BCD", "#7CCBCD", "#DEE5EB",
+                   "#465C6D", "#DF6C5A", "#79BE7E", "#E5C872", "#67B5ED", "#D389E5", "#84DDE0", "#E5EFF5"]
+        ),
         TerminalScheme(
             id: "classic-black", name: "经典黑", detail: "极简黑底，长时间盯屏不累",
             background: "#0C0C0C", foreground: "#CCCCCC", cursor: "#CCCCCC",
@@ -141,7 +156,9 @@ enum TerminalThemeManager {
         if id == customSchemeID, let custom = customScheme {
             return custom
         }
-        return schemes.first { $0.id == id } ?? schemes[0]
+        return schemes.first { $0.id == id }
+            ?? schemes.first { $0.id == defaultSchemeID }
+            ?? schemes[0]
     }
 
     static func select(_ id: String) {
@@ -184,9 +201,9 @@ enum TerminalThemeManager {
     // MARK: Font
 
     static let fontFamilies: [TerminalFontFamily] = [
-        TerminalFontFamily(id: "menlo", displayName: "Menlo（默认）", candidates: ["Menlo-Regular", "Menlo"]),
+        TerminalFontFamily(id: "menlo", displayName: "Menlo", candidates: ["Menlo-Regular", "Menlo"]),
         TerminalFontFamily(id: "sf-mono", displayName: "SF Mono", candidates: ["SFNSMono-Regular", "SF Mono", "SFNSMono"]),
-        TerminalFontFamily(id: "monaco", displayName: "Monaco", candidates: ["Monaco"]),
+        TerminalFontFamily(id: "monaco", displayName: "Monaco（默认）", candidates: ["Monaco"]),
         TerminalFontFamily(id: "courier-new", displayName: "Courier New", candidates: ["Courier New", "CourierNewPSMT"]),
         TerminalFontFamily(id: "andale-mono", displayName: "Andale Mono", candidates: ["Andale Mono"]),
         TerminalFontFamily(id: "jetbrains-mono", displayName: "JetBrains Mono", candidates: ["JetBrains Mono", "JetBrainsMono-Regular"]),
@@ -203,18 +220,25 @@ enum TerminalThemeManager {
         TerminalFontFamily(id: "ubuntu-mono", displayName: "Ubuntu Mono", candidates: ["Ubuntu Mono", "UbuntuMono-Regular"]),
     ]
 
+    /// Monaco, matching this Mac's Apple Terminal profile. The default the
+    /// settings sheet offers and the fallback for an unknown stored id.
+    static let defaultFontFamilyID = "monaco"
+
     /// Families actually present on this machine, in the curated order.
     static var installedFontFamilies: [TerminalFontFamily] {
         fontFamilies.filter { $0.resolvedName != nil }
     }
 
     static var fontFamilyID: String {
-        UserDefaults.standard.string(forKey: fontFamilyKey) ?? "menlo"
+        UserDefaults.standard.string(forKey: fontFamilyKey) ?? defaultFontFamilyID
     }
 
     static var fontFamily: TerminalFontFamily {
+        let installed = installedFontFamilies
         let id = fontFamilyID
-        return installedFontFamilies.first { $0.id == id } ?? installedFontFamilies[0]
+        return installed.first { $0.id == id }
+            ?? installed.first { $0.id == defaultFontFamilyID }
+            ?? installed[0]
     }
 
     static var fontSize: CGFloat {
