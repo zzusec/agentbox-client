@@ -508,8 +508,8 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         let alert = NSAlert()
         alert.messageText = "重命名完成：以哪边代码为准？"
         alert.informativeText = "同步内容有分歧时，所选一侧将覆盖另一侧；内容一致则无事发生。"
-        alert.addButton(withTitle: "以服务器为准")
-        alert.addButton(withTitle: "以本地为准")
+        alert.addButton(withTitle: ProjectSyncSetting.policyLabel("server"))
+        alert.addButton(withTitle: ProjectSyncSetting.policyLabel("local"))
         switch alert.runModal() {
         case .alertFirstButtonReturn:
             return "server"
@@ -751,8 +751,8 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         let alert = NSAlert()
         alert.messageText = "首次同步以哪边为准？"
         alert.informativeText = "只有本地目录和服务器项目同时有内容且没有同步基线时才使用这项选择。"
-        alert.addButton(withTitle: "以本地为准")
-        alert.addButton(withTitle: "以服务器为准")
+        alert.addButton(withTitle: ProjectSyncSetting.policyLabel("local"))
+        alert.addButton(withTitle: ProjectSyncSetting.policyLabel("server"))
         alert.addButton(withTitle: "稍后决定")
         switch alert.runModal() {
         case .alertFirstButtonReturn:

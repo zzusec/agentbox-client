@@ -30,9 +30,9 @@ final class NewProjectViewController: NSViewController {
     private(set) var customDir: String?
 
     private static let policies: [(String?, String)] = [
-        (nil, "跟随工作空间"),
-        ("server", "以服务器为准"),
-        ("local", "以本地为准"),
+        (nil, ProjectSyncSetting.policyLabel(nil)),
+        ("server", ProjectSyncSetting.policyLabel("server")),
+        ("local", ProjectSyncSetting.policyLabel("local")),
     ]
 
     /// Stable handles for the smoke checks, which have no other way to tell
@@ -88,7 +88,7 @@ final class NewProjectViewController: NSViewController {
 
         let policyLabel = fieldLabel("同步方式")
         policyPopup.identifier = NSUserInterfaceItemIdentifier(Field.policy.rawValue)
-        policyPopup.addItem(withTitle: "跟随工作空间")
+        policyPopup.addItem(withTitle: ProjectSyncSetting.policyLabel(nil))
         policyPopup.itemArray.first?.toolTip = "使用工作空间当前的同步方式"
         for (_, label) in Self.policies.dropFirst() {
             policyPopup.addItem(withTitle: label)

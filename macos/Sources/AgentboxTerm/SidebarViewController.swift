@@ -488,9 +488,9 @@ extension SidebarViewController: NSMenuDelegate {
         let submenu = NSMenu()
 
         let options: [(String, String?)] = [
-            ("跟随工作空间", nil),
-            ("以服务器为准", "server"),
-            ("以本地为准", "local"),
+            (ProjectSyncSetting.policyLabel(nil), nil),
+            (ProjectSyncSetting.policyLabel("server"), "server"),
+            (ProjectSyncSetting.policyLabel("local"), "local"),
         ]
         for (title, policy) in options {
             let item = NSMenuItem()
