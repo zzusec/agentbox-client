@@ -109,4 +109,57 @@ final class TerminalSurface: TerminalView {
         ) as? [URL] ?? []
         return objects
     }
+
+    // MARK: - NSTextInputClient (marked-text support for CJK input methods)
+
+    /// SwiftTerm's base implementation leaves `setMarkedText`/`unmarkText` empty
+    /// and always returns `false` for `hasMarkedText`.  This breaks most CJK
+    /// input methods: the composition window never appears, and the IME can
+    /// re-submit previously-comitted text when the user backspaces to an empty
+    /// line because it thinks the earlier composition was never torn down.
+    ///
+    /// The minimal fix below keeps a local `markedTextBuffer`, sends backspace
+    /// to erase the old buffer, then sends the new buffer.  When `unmarkText`
+    /// is called we erase the buffer so that the following `insertText` lands
+    /// the final characters cleanly.
+    private var markedTextBuffer: String = ""
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        let newText: String
+        if let s = string as? NSString {
+            newText = s as String
+        } else if let attr = string as? NSAttributedString {
+            newText = attr.string
+        } else {
+            newText = ""
+        }
+
+        // Erase old marked text.
+        for _ in 0..<markedTextBuffer.count {
+            send([0x7f])
+        }
+
+        // Insert new marked text (if any).
+        if !newText.isEmpty {
+            send(txt: newText)
+        }
+
+        markedTextBuffer = newText
+    }
+
+    override func unmarkText() {
+        for _ in 0..<markedTextBuffer.count {
+            send([0x7f])
+        }
+        markedTextBuffer = ""
+    }
+
+    override func hasMarkedText() -> Bool {
+        return !markedTextBuffer.isEmpty
+    }
+
+    override func markedRange() -> NSRange {
+        guard !markedTextBuffer.isEmpty else { return NSRange(location: NSNotFound, length: 0) }
+        return NSRange(location: 0, length: markedTextBuffer.utf16.count)
+    }
 }
