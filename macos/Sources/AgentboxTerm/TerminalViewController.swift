@@ -79,6 +79,16 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         view.window?.makeFirstResponder(surface)
     }
 
+    /// Re-fit the PTY and terminal grid to the current visible size. Needed
+    /// after a tab returns to the hierarchy: while backgrounded the view
+    /// receives no layout events, so the grid keeps the old column count and
+    /// SwiftTerm leaves the uncovered strip unpainted (stale pixels show).
+    func refitPTY() {
+        view.layoutSubtreeIfNeeded()
+        let terminal = surface.getTerminal()
+        bridge?.resize(cols: terminal.cols, rows: terminal.rows)
+    }
+
     private func connect() {
         guard let url = client.terminalURL(workspace: workspace, project: project.name) else {
             surface.feed(text: "\r\n无法生成终端连接地址。\r\n")

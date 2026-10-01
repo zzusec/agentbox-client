@@ -106,6 +106,7 @@ final class TerminalGridViewController: NSViewController {
         rebuildTabs()
         updateEmptyState()
         view.window?.title = terminal.project.name
+        terminal.refitPTY()
         terminal.activateTerminal()
     }
 
