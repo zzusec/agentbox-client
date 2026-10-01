@@ -595,6 +595,8 @@ data/
 - `initial_policy` 只在建基线时生效，不是「持续以某侧为准」的开关——不要把它当成能自动解决日常冲突的模式。
 - **`-force-policy local|server` 是一次性覆盖**：`ProjectTarget.ForcePolicy` 非空时跳过基线直接走 `bootstrapPlan`，即「现在就以这一侧覆盖另一侧」——选 server 会删掉服务器上没有的本地文件，选 local 会删掉本地没有的服务器文件。**它被显式禁止与 `-watch` 同用**（否则每一轮都会重新覆盖）。Mac 客户端的「立即同步 ⟳」就是停掉 watcher → 跑一次 `-force-policy` → 再起 watcher。
 - 计划解析统一走 `resolvePlan`：force > 无基线走 initial_policy > 三路合并。不要在别处再写一遍这个分支。
+- **`PutFile` 不能把调用方的 reader 交给 net/http 托管**：请求体只要是 `io.ReadCloser`，transport 就会在发完请求后把它关掉；而 `applyPlan` 紧接着还要 `file.Close()`，第二次 close 直接报「file already closed」，**每一次上传都会失败**。`readerOnly()` 把 ReadCloser 包成纯 `io.Reader`，让 `NewRequest` 套 `io.NopCloser`，所有权留在调用方。`TestPutFileLeavesTheCallersReaderOpen` 钉死这条。
+- `Engine.Progress(done, total)` 每应用一个动作回调一次，`abox-sync` 按 25 条节流打印 `项目: 已完成/总数`；Mac 客户端靠这条把底部状态栏的转圈动起来（`MainViewController.handleSyncOutput` 用 `: \d+/\d+$` 判定进度行）。
 - Mac 侧每项目设置存在 `UserDefaults`（`ProjectSyncStore`，目录与策略两个字典分开存，避免半截写丢另一半），键是项目 ID；「跟随工作空间」= 条目被删掉，而不是存空值。
 
 ## 代码约定与注意事项

@@ -121,11 +121,16 @@ func (c *Client) PutFile(
 	body io.Reader,
 ) error {
 	rel := url.Values{"path": []string{entry.Path}}.Encode()
+	// net/http takes ownership of a request body that is an io.ReadCloser and
+	// closes it once the request is sent. The caller still owns this reader —
+	// applyPlan closes the file right after this returns — so hide the
+	// ReadCloser-ness and let NewRequest wrap it in a NopCloser instead.
+	// Without this every upload fails with "file already closed".
 	req, err := c.request(
 		ctx,
 		http.MethodPut,
 		"/api/sync/projects/"+url.PathEscape(projectID)+"/file?"+rel,
-		body,
+		readerOnly(body),
 	)
 	if err != nil {
 		return err
@@ -230,6 +235,16 @@ func (c *Client) request(
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	return req, nil
+}
+
+// readerOnly hides the ReadCloser-ness of a request body so net/http wraps it
+// in an io.NopCloser instead of adopting it and closing it on the caller's
+// behalf.
+func readerOnly(body io.Reader) io.Reader {
+	if body == nil {
+		return nil
+	}
+	return struct{ io.Reader }{body}
 }
 
 func responseError(resp *http.Response) error {

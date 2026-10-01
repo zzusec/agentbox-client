@@ -19,6 +19,12 @@ type Engine struct {
 	DeviceID   string
 	DeviceName string
 
+	// Progress, when set, is called after each action is applied so callers can
+	// show a moving bar instead of waiting for the whole tree to land. It is
+	// only ever called from inside SyncProject, so the caller can rebind it per
+	// project without any locking.
+	Progress func(done, total int)
+
 	// lastRemote caches each project's last synced (filtered) remote
 	// manifest, keyed by project ID. Together with the server's
 	// If-Revision support it turns idle poll cycles into tiny 204 probes.
@@ -319,7 +325,8 @@ func (e *Engine) applyPlan(
 	localProject string,
 	plan Plan,
 ) error {
-	for _, action := range plan.Actions {
+	total := len(plan.Actions)
+	for index, action := range plan.Actions {
 		target, err := safeProjectPath(localProject, action.Entry.Path)
 		if err != nil {
 			return err
@@ -385,6 +392,9 @@ func (e *Engine) applyPlan(
 			}
 		default:
 			return fmt.Errorf("unknown sync action %q", action.Type)
+		}
+		if e.Progress != nil {
+			e.Progress(index+1, total)
 		}
 	}
 	return nil

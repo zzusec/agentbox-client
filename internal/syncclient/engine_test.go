@@ -1,10 +1,16 @@
 package syncclient
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -246,5 +252,89 @@ func TestResolvePlanWithoutAPolicyAsksForOne(t *testing.T) {
 	var conflict *InitialConflictError
 	if !errors.As(err, &conflict) {
 		t.Fatalf("resolvePlan = %v, want an InitialConflictError", err)
+	}
+}
+
+// Progress is what drives the client's progress bar, so it has to fire once
+// per applied action with a total the caller can divide by.
+func TestApplyPlanReportsProgress(t *testing.T) {
+	var puts, deletes int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			puts++
+		case http.MethodDelete:
+			deletes++
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "synthetic-token")
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	var progress []string
+	engine := &Engine{
+		Client:   client,
+		DeviceID: "device-1",
+		Progress: func(done, total int) {
+			progress = append(progress, fmt.Sprintf("%d/%d", done, total))
+		},
+	}
+	plan := Plan{Actions: []Action{
+		{Type: ActionUpload, Entry: Entry{Path: "sub", Kind: "dir", Mode: 0o755}},
+		{Type: ActionUpload, Entry: Entry{Path: "a.txt", Kind: "file", Mode: 0o644}},
+		{Type: ActionDeleteRemote, Entry: Entry{Path: "gone.txt", Kind: "file"}},
+	}}
+	lease := Lease{LeaseID: "lease-1", DeviceID: "device-1"}
+	if err := engine.applyPlan(context.Background(), "p1", lease, dir, plan); err != nil {
+		t.Fatalf("applyPlan: %v", err)
+	}
+	if want := []string{"1/3", "2/3", "3/3"}; !reflect.DeepEqual(progress, want) {
+		t.Fatalf("progress = %v, want %v", progress, want)
+	}
+	if puts != 2 || deletes != 1 {
+		t.Fatalf("server saw %d puts and %d deletes, want 2 and 1", puts, deletes)
+	}
+}
+
+// PutFile must leave the caller's reader open. applyPlan closes the file it
+// opened right after the call returns, so a transport that had already closed
+// it turned every single upload into "file already closed".
+func TestPutFileLeavesTheCallersReaderOpen(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Drain the body the way the real handler does.
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "synthetic-token")
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "a.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open file: %v", err)
+	}
+	entry := Entry{Path: "a.txt", Kind: "file", Mode: 0o644}
+	if err := client.PutFile(context.Background(), "p1", "lease-1", "device-1", entry, file); err != nil {
+		t.Fatalf("PutFile: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("PutFile closed the caller's file: %v", err)
 	}
 }

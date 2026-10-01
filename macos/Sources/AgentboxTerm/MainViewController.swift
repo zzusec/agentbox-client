@@ -14,6 +14,12 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     private var sidebarWidth: CGFloat = 270
     private let toolbarSidebar = NSToolbarItem.Identifier("agentbox-client.sidebar")
     private let toolbarSettings = NSToolbarItem.Identifier("agentbox-client.terminal-settings")
+    private let statusBar = NSView()
+    private let syncSpinner = NSProgressIndicator()
+    private let syncStatusLabel = NSTextField(labelWithString: "")
+    /// What the bottom bar currently says, and whether a sync is in flight.
+    private(set) var syncStatusText = ""
+    private(set) var isSyncing = false
 
     init(client: AgentboxClient) {
         self.client = client
@@ -41,10 +47,91 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         splitView.addArrangedSubview(sidebarView)
         splitView.addArrangedSubview(terminalView)
         splitView.setHoldingPriority(.defaultHigh, forSubviewAt: 0)
-        splitView.frame = root.bounds
-        splitView.autoresizingMask = [.width, .height]
+        splitView.translatesAutoresizingMaskIntoConstraints = false
+
+        let bar = buildStatusBar()
         root.addSubview(splitView)
+        root.addSubview(bar)
+        NSLayoutConstraint.activate([
+            splitView.topAnchor.constraint(equalTo: root.topAnchor),
+            splitView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            splitView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            splitView.bottomAnchor.constraint(equalTo: bar.topAnchor),
+            bar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            bar.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            bar.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            bar.heightAnchor.constraint(equalToConstant: 26),
+        ])
         view = root
+    }
+
+    /// The always-visible strip along the bottom of the window. Sync used to
+    /// report only into the sidebar's status line, which is easy to miss — a
+    /// forced overwrite of a big tree looked like nothing was happening.
+    private func buildStatusBar() -> NSView {
+        statusBar.translatesAutoresizingMaskIntoConstraints = false
+        statusBar.wantsLayer = true
+        statusBar.layer?.backgroundColor = NativeTheme.card.cgColor
+
+        let separator = NSView()
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        separator.wantsLayer = true
+        separator.layer?.backgroundColor = NativeTheme.border.cgColor
+
+        syncSpinner.style = .spinning
+        syncSpinner.controlSize = .small
+        syncSpinner.isDisplayedWhenStopped = false
+        syncSpinner.translatesAutoresizingMaskIntoConstraints = false
+
+        syncStatusLabel.font = .systemFont(ofSize: 11)
+        syncStatusLabel.textColor = NativeTheme.secondaryText
+        syncStatusLabel.lineBreakMode = .byTruncatingMiddle
+        syncStatusLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let content = NSStackView(views: [syncSpinner, syncStatusLabel])
+        content.orientation = .horizontal
+        content.spacing = 8
+        content.translatesAutoresizingMaskIntoConstraints = false
+
+        statusBar.addSubview(separator)
+        statusBar.addSubview(content)
+        NSLayoutConstraint.activate([
+            separator.topAnchor.constraint(equalTo: statusBar.topAnchor),
+            separator.leadingAnchor.constraint(equalTo: statusBar.leadingAnchor),
+            separator.trailingAnchor.constraint(equalTo: statusBar.trailingAnchor),
+            separator.heightAnchor.constraint(equalToConstant: 1),
+            content.leadingAnchor.constraint(equalTo: statusBar.leadingAnchor, constant: 12),
+            content.trailingAnchor.constraint(lessThanOrEqualTo: statusBar.trailingAnchor, constant: -12),
+            content.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
+            syncSpinner.widthAnchor.constraint(equalToConstant: 14),
+            syncSpinner.heightAnchor.constraint(equalToConstant: 14),
+        ])
+        return statusBar
+    }
+
+    /// Shows a sync line in the bottom bar. A trailing "/total" progress line
+    /// also drives the spinner, so a long overwrite visibly moves.
+    func showSyncStatus(_ message: String, busy: Bool = false) {
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        syncStatusLabel.stringValue = text
+        syncStatusLabel.toolTip = text
+        syncStatusText = text
+        isSyncing = busy
+        if busy {
+            syncSpinner.startAnimation(nil)
+        } else {
+            syncSpinner.stopAnimation(nil)
+        }
+    }
+
+    /// Routes a line of engine output to the bottom bar. A trailing
+    /// "done/total" is progress and spins the indicator; anything else is a
+    /// result line and stops it.
+    func handleSyncOutput(_ message: String) {
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        let isProgress = text.range(of: #": \d+/\d+$"#, options: .regularExpression) != nil
+        showSyncStatus(text, busy: isProgress)
     }
 
     override func viewDidLoad() {
@@ -132,6 +219,8 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         sidebar.setLocalRoot(root)
         if let root {
             startSync(workspace, localRoot: URL(fileURLWithPath: root, isDirectory: true))
+        } else {
+            showSyncStatus("未配置本地同步目录：点侧栏「选择目录」后开始同步")
         }
         sidebar.setProjects([])
         sidebar.setStatus("正在读取项目…")
@@ -438,7 +527,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             projectSettings: projectSettings(for: workspace)
         )
         manager.onStatus = { [weak self] message in
-            self?.sidebar.setStatus(message)
+            self?.handleSyncOutput(message)
         }
         syncManager = manager
         manager.start()
@@ -559,10 +648,10 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     /// the policy the user picked.
     private func syncProjectNow(_ project: RemoteProject, policy: String) {
         guard let workspace, workspace.id == self.workspace?.id else { return }
-        guard let root = UserDefaults.standard.string(forKey: localRootKey(workspace)), !root.isEmpty else {
-            sidebar.setStatus("先选择本地同步目录")
-            return
-        }
+        // Sync cannot run without a local directory. Asking for one here beats
+        // the old behaviour, which wrote a line into the sidebar and returned —
+        // the button looked broken.
+        guard let root = requireLocalRoot(for: workspace, policy: policy) else { return }
         let label = ProjectSyncSetting.policyLabel(policy)
         let overwrite = policy == "server"
             ? "服务器上没有的本地文件会被删除，服务器上的文件会全部下载下来。"
@@ -583,23 +672,61 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         let manager = SyncManager(
             client: client,
             workspace: workspace,
-            localRoot: URL(fileURLWithPath: root, isDirectory: true),
+            localRoot: root,
             initialPolicy: UserDefaults.standard.string(forKey: initialPolicyKey(workspace)) ?? "",
             projectSettings: projectSettings(for: workspace)
         )
         manager.onStatus = { [weak self] message in
-            self?.sidebar.setStatus(message)
+            self?.handleSyncOutput(message)
         }
         syncManager?.stop()
         syncManager = manager
-        sidebar.setStatus("正在以\(label)全量同步「\(project.name)」…")
+        showSyncStatus("正在以\(label)全量同步「\(project.name)」…", busy: true)
         manager.runForcedPass(project: project.name, policy: policy) { [weak self] result in
             guard let self else { return }
-            self.sidebar.setStatus("\(project.name)：\(result)")
+            self.showSyncStatus("\(project.name)：\(result)")
             // Resume the watcher, unless the user moved to another workspace.
             guard self.workspace?.id == workspace.id, self.syncManager === manager else { return }
             manager.start()
         }
+    }
+
+    /// The workspace's local sync directory, asking for one when it is missing
+    /// (and recording the direction the caller just picked as the workspace
+    /// default, so the watcher that resumes afterwards is well defined).
+    private func requireLocalRoot(for workspace: Workspace, policy: String?) -> URL? {
+        if let path = UserDefaults.standard.string(forKey: localRootKey(workspace)), !path.isEmpty {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        let alert = NSAlert()
+        alert.messageText = "还没有选择本地同步目录"
+        alert.informativeText = "同步需要先指定一个本机目录来存放项目文件；选好之后就会立刻开始。"
+        alert.addButton(withTitle: "选择目录…")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        guard let url = runDirectoryPanel(startingAt: nil, message: "选择本地同步目录") else { return nil }
+        UserDefaults.standard.set(url.path, forKey: localRootKey(workspace))
+        if let policy,
+           (UserDefaults.standard.string(forKey: initialPolicyKey(workspace)) ?? "").isEmpty {
+            UserDefaults.standard.set(policy, forKey: initialPolicyKey(workspace))
+        }
+        sidebar.setLocalRoot(url.path)
+        return url
+    }
+
+    private func runDirectoryPanel(startingAt: URL?, message: String) -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "选择"
+        panel.message = message
+        if let startingAt {
+            panel.directoryURL = startingAt
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        return panel.runModal() == .OK ? panel.url : nil
     }
 
     private func chooseInitialPolicy(_ workspace: Workspace) -> String? {

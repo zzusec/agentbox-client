@@ -72,6 +72,11 @@ final class SyncManager {
     /// Runs a single forced-overwrite pass for one project and reports what the
     /// engine printed.
     ///
+    /// Output is streamed through `onStatus` as it arrives — a full overwrite
+    /// of a big tree takes a while, and waiting for the exit before showing
+    /// anything makes the button look dead. The completion carries the last
+    /// line so the status bar can settle on the result.
+    ///
     /// The watcher must already be stopped and restarted by the caller: two
     /// engines syncing the same project at once would fight over the lease and
     /// the baseline. `-force-policy` is deliberately a one-shot flag — the
@@ -99,19 +104,38 @@ final class SyncManager {
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
+        let lock = NSLock()
+        var collected = ""
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            lock.lock()
+            collected += text
+            lock.unlock()
+            DispatchQueue.main.async {
+                self?.onStatus?(text.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 try process.run()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
-                let text = (String(data: data, encoding: .utf8) ?? "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                pipe.fileHandleForReading.readabilityHandler = nil
+                lock.lock()
+                let output = collected
+                lock.unlock()
                 let status = process.terminationStatus
+                let last = output
+                    .split(separator: "\n")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .last { !$0.isEmpty }
                 DispatchQueue.main.async {
-                    if status == 0 {
-                        completion(text.isEmpty ? "全量同步完成" : text)
+                    if status != 0 {
+                        completion(last ?? "全量同步失败（退出码 \(status)）")
+                    } else if let last {
+                        completion(last)
                     } else {
-                        completion(text.isEmpty ? "全量同步失败（退出码 \(status)）" : text)
+                        completion("全量同步完成（没有需要变更的文件）")
                     }
                 }
             } catch {

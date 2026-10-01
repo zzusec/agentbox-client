@@ -622,6 +622,20 @@ struct AppSmokeChecks {
         precondition(URLProtocol.registerClass(AppHTTPFixture.self))
         let client = AgentboxClient(server: URL(string: "https://agentbox-app-fixture.invalid")!, user: "synthetic-app-user", token: "synthetic-app-token")
         let controller = MainViewController(client: client)
+        // The bottom bar is the only place sync progress is visible, so the
+        // spinner has to follow a "done/total" line and stop on a result.
+        controller.showSyncStatus("正在同步…", busy: true)
+        precondition(controller.isSyncing, "an explicit busy status must spin")
+        precondition(controller.syncStatusText == "正在同步…")
+        controller.handleSyncOutput("demo: 25/100")
+        precondition(controller.isSyncing, "a done/total line is progress and must keep spinning")
+        precondition(controller.syncStatusText == "demo: 25/100")
+        controller.handleSyncOutput("demo: applied 12 changes")
+        precondition(!controller.isSyncing, "a result line must stop the spinner")
+        precondition(controller.syncStatusText == "demo: applied 12 changes")
+        controller.handleSyncOutput("   ")
+        precondition(controller.syncStatusText == "demo: applied 12 changes", "blank output must be ignored")
+        controller.showSyncStatus("", busy: false)
         let window = NSWindow(contentViewController: controller)
         window.title = "Agentbox App regression — synthetic data"
         window.styleMask = [.titled, .closable, .resizable]

@@ -83,6 +83,14 @@ The palette toolbar button opens the terminal settings sheet:
   on (mouse events reach TUI apps like vim/tmux), and smart (reports like on,
   but holding ⇧ while dragging selects locally).
 
+## Sync status bar
+
+The strip along the bottom of the window is where sync reports itself. It shows
+the engine's latest line and spins while a pass is in flight — a line ending in
+`done/total` is progress, anything else is a result. Sync needs a local
+directory; without one the bar says so, and picking ⟳ on a sync mode offers to
+choose one instead of quietly doing nothing.
+
 ## Development
 
 ```bash

@@ -154,7 +154,15 @@ func syncOnce(
 			InitialPolicy: projectInitialPolicy(cfg, project),
 			ForcePolicy:   forcePolicy,
 		}
+		// Report progress so the Mac client's status bar moves on a big tree.
+		// Throttled, but always emitting the final count.
+		engine.Progress = func(done, total int) {
+			if done == total || done%25 == 0 {
+				log.Printf("%s: %d/%d", project.Name, done, total)
+			}
+		}
 		result, err := engine.SyncProject(ctx, target)
+		engine.Progress = nil
 		if err != nil {
 			var conflicts *syncclient.ConflictError
 			if errors.As(err, &conflicts) {
