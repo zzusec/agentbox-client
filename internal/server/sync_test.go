@@ -118,3 +118,58 @@ func TestSyncLeaseRejectsSecondDeviceWrites(t *testing.T) {
 		t.Fatal("unexpected write result")
 	}
 }
+
+func TestSyncManifestIfRevisionAndCache(t *testing.T) {
+	s, sess := newTestServer(t)
+	project := syncTestProject(t, s, sess)
+	if err := os.WriteFile(
+		filepath.Join(s.workspaceDir(sess), "alpha", "hello.txt"),
+		[]byte("hello"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	fetch := func(ifRevision string) (*httptest.ResponseRecorder, syncManifest) {
+		req := accessRequest(sess.User, http.MethodGet, "/manifest", "")
+		req.SetPathValue("project", project.ID)
+		if ifRevision != "" {
+			req.Header.Set("X-Agentbox-If-Revision", ifRevision)
+		}
+		recorder := httptest.NewRecorder()
+		s.handleSyncManifest(recorder, req)
+		var manifest syncManifest
+		_ = json.Unmarshal(recorder.Body.Bytes(), &manifest)
+		return recorder, manifest
+	}
+
+	first, firstManifest := fetch("")
+	if first.Code != http.StatusOK || firstManifest.Revision == "" {
+		t.Fatalf("first manifest status=%d rev=%q", first.Code, firstManifest.Revision)
+	}
+
+	// Unchanged tree + matching If-Revision: a cheap 204 poll.
+	notModified, _ := fetch(firstManifest.Revision)
+	if notModified.Code != http.StatusNoContent {
+		t.Fatalf("not modified status = %d body=%s", notModified.Code, notModified.Body.String())
+	}
+
+	// The tree changed: an old If-Revision must still return the new manifest.
+	if err := os.WriteFile(
+		filepath.Join(s.workspaceDir(sess), "alpha", "hello.txt"),
+		[]byte("hello world"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	changed, changedManifest := fetch(firstManifest.Revision)
+	if changed.Code != http.StatusOK || changedManifest.Revision == firstManifest.Revision {
+		t.Fatalf("changed manifest status=%d rev=%q", changed.Code, changedManifest.Revision)
+	}
+
+	// And the fresh revision hits the cached fast path again.
+	second, _ := fetch(changedManifest.Revision)
+	if second.Code != http.StatusNoContent {
+		t.Fatalf("second not modified status = %d body=%s", second.Code, second.Body.String())
+	}
+}

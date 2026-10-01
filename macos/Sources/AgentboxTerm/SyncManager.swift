@@ -83,7 +83,7 @@ final class SyncManager {
             "local_root": localRoot.path,
             "device_id": deviceID,
             "device_name": Host.current().localizedName ?? "Mac",
-            "interval_seconds": 5,
+            "interval_seconds": 1,
             "projects": [],
             "initial_policy": initialPolicy,
         ]

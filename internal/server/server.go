@@ -70,6 +70,8 @@ type Server struct {
 	mcpCheckMu sync.Mutex
 	mcpChecks  map[string]bool
 
+	syncManifests syncManifestCache
+
 	gitOperations   gitOperationRegistry
 	gitTerminal     gitTerminalRegistry
 	gitOAuth        gitOAuthState

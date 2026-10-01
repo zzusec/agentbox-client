@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,6 +18,27 @@ type Engine struct {
 	Client     *Client
 	DeviceID   string
 	DeviceName string
+
+	// lastRemote caches each project's last synced (filtered) remote
+	// manifest, keyed by project ID. Together with the server's
+	// If-Revision support it turns idle poll cycles into tiny 204 probes.
+	mu         sync.Mutex
+	lastRemote map[string]Manifest
+}
+
+func (e *Engine) cachedRemote(projectID string) Manifest {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.lastRemote[projectID]
+}
+
+func (e *Engine) rememberRemote(projectID string, manifest Manifest) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.lastRemote == nil {
+		e.lastRemote = map[string]Manifest{}
+	}
+	e.lastRemote[projectID] = manifest
 }
 
 type SyncResult struct {
@@ -62,20 +84,34 @@ func (e *Engine) SyncProject(
 	if err := ensureSafeProjectPath(localRoot, localProject); err != nil {
 		return SyncResult{}, err
 	}
-
-	remote, err := e.Client.Manifest(ctx, project.ID)
+	base, hasBase, err := loadBase(localRoot, project.ID, localProject)
 	if err != nil {
 		return SyncResult{}, err
 	}
-	remote, err = FilterManifest(remote, localProject)
+
+	lastRemote := e.cachedRemote(project.ID)
+	ifRevision := lastRemote.ServerRevision
+	if ifRevision == "" && hasBase {
+		ifRevision = base.ServerRevision
+	}
+	remote, notModified, err := e.Client.Manifest(ctx, project.ID, ifRevision)
 	if err != nil {
 		return SyncResult{}, err
+	}
+	if notModified {
+		remote = lastRemote
+		if remote.Revision == "" {
+			remote = base
+		}
+	} else {
+		rawRevision := remote.Revision
+		remote, err = FilterManifest(remote, localProject)
+		if err != nil {
+			return SyncResult{}, err
+		}
+		remote.ServerRevision = rawRevision
 	}
 	local, err := localManifest(localProject)
-	if err != nil {
-		return SyncResult{}, err
-	}
-	base, hasBase, err := loadBase(localRoot, project.ID, localProject)
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -97,6 +133,7 @@ func (e *Engine) SyncProject(
 		if err := saveBase(localRoot, project.ID, remote); err != nil {
 			return SyncResult{}, err
 		}
+		e.rememberRemote(project.ID, remote)
 		return SyncResult{Project: project.Name}, nil
 	}
 
@@ -110,14 +147,19 @@ func (e *Engine) SyncProject(
 
 	// Re-read under the lease. Server-side Claude can still write during the
 	// transfer, but this closes the gap between the first manifest and lock.
-	remote, err = e.Client.Manifest(ctx, project.ID)
+	remote, notModified, err = e.Client.Manifest(ctx, project.ID, "")
 	if err != nil {
 		return SyncResult{}, err
 	}
+	if notModified {
+		return SyncResult{}, errors.New("租约下的清单意外返回无变化")
+	}
+	leaseRawRevision := remote.Revision
 	remote, err = FilterManifest(remote, localProject)
 	if err != nil {
 		return SyncResult{}, err
 	}
+	remote.ServerRevision = leaseRawRevision
 	if !hasBase {
 		plan, err = bootstrapPlan(project.Name, initialPolicy, local, remote)
 	} else {
@@ -134,6 +176,7 @@ func (e *Engine) SyncProject(
 		if err := saveBase(localRoot, project.ID, remote); err != nil {
 			return SyncResult{}, err
 		}
+		e.rememberRemote(project.ID, remote)
 		return SyncResult{Project: project.Name}, nil
 	}
 	if err := e.applyPlan(ctx, project.ID, lease, localProject, plan); err != nil {
@@ -144,14 +187,19 @@ func (e *Engine) SyncProject(
 	if err != nil {
 		return SyncResult{}, err
 	}
-	finalRemote, err := e.Client.Manifest(ctx, project.ID)
+	finalRemote, notModified, err := e.Client.Manifest(ctx, project.ID, "")
 	if err != nil {
 		return SyncResult{}, err
 	}
+	if notModified {
+		return SyncResult{}, errors.New("同步完成后服务器清单意外返回无变化")
+	}
+	finalRawRevision := finalRemote.Revision
 	finalRemote, err = FilterManifest(finalRemote, localProject)
 	if err != nil {
 		return SyncResult{}, err
 	}
+	finalRemote.ServerRevision = finalRawRevision
 	verify := BuildPlan(Entries(finalLocal), Entries(finalLocal), Entries(finalRemote))
 	if len(verify.Conflicts) != 0 || len(verify.Actions) != 0 {
 		return SyncResult{}, errors.New("同步完成后本地和服务器仍不一致")
@@ -159,6 +207,7 @@ func (e *Engine) SyncProject(
 	if err := saveBase(localRoot, project.ID, finalRemote); err != nil {
 		return SyncResult{}, err
 	}
+	e.rememberRemote(project.ID, finalRemote)
 	return SyncResult{Project: project.Name, Actions: len(plan.Actions)}, nil
 }
 

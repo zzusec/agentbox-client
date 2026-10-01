@@ -55,10 +55,34 @@ func (c *Client) Projects(ctx context.Context, sessionID string) ([]Project, err
 	return out, err
 }
 
-func (c *Client) Manifest(ctx context.Context, projectID string) (Manifest, error) {
+// Manifest fetches the server-side manifest. When ifRevision is non-empty and
+// the server manifest still carries that revision, the server answers
+// 204-without-body and notModified is true — the caller then reuses its cached
+// manifest instead of transferring it again.
+func (c *Client) Manifest(ctx context.Context, projectID, ifRevision string) (Manifest, bool, error) {
+	req, err := c.request(ctx, http.MethodGet, "/api/sync/projects/"+url.PathEscape(projectID)+"/manifest", nil)
+	if err != nil {
+		return Manifest{}, false, err
+	}
+	if ifRevision != "" {
+		req.Header.Set("X-Agentbox-If-Revision", ifRevision)
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return Manifest{}, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNoContent {
+		return Manifest{}, true, nil
+	}
+	if err := responseError(resp); err != nil {
+		return Manifest{}, false, err
+	}
 	var out Manifest
-	err := c.doJSON(ctx, http.MethodGet, "/api/sync/projects/"+url.PathEscape(projectID)+"/manifest", nil, &out)
-	return out, err
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return Manifest{}, false, err
+	}
+	return out, false, nil
 }
 
 func (c *Client) AcquireLease(

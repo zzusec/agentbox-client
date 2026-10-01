@@ -28,7 +28,12 @@ type Entry struct {
 type Manifest struct {
 	ProjectID string  `json:"project_id"`
 	Revision  string  `json:"revision"`
-	Entries   []Entry `json:"entries"`
+	// ServerRevision is the revision of the server's unfiltered manifest —
+	// the value the client echoes back with If-Revision for cheap polls.
+	// FilterManifest recomputes Revision over the filtered entries, so the
+	// raw one has to be carried here.
+	ServerRevision string  `json:"server_revision,omitempty"`
+	Entries        []Entry `json:"entries"`
 }
 
 type ActionType string

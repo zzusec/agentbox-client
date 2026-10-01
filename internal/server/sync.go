@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"agentbox/internal/dockerx"
@@ -59,12 +60,107 @@ func (s *Server) handleSyncManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer root.Close()
+
+	// The manifest build hashes every file, which is too expensive to run at
+	// one-second poll rates. The tree's stat signature (path/size/mtime/mode/
+	// link target) is cheap to compute; while it stays unchanged the cached
+	// manifest — hashes included — remains valid. The cache backstop re-hashes
+	// at least once a minute so pathological same-mtime edits self-heal.
+	sig, err := s.statSyncSignature(root)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	ifRevision := r.Header.Get("X-Agentbox-If-Revision")
+	if cached, ok := s.syncManifests.get(project.ID, sig, time.Now()); ok {
+		if ifRevision != "" && cached.Revision == ifRevision {
+			w.Header().Set("X-Agentbox-Revision", cached.Revision)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		writeJSON(w, http.StatusOK, cached)
+		return
+	}
 	manifest, err := buildSyncManifest(project.ID, root)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.syncManifests.put(project.ID, sig, manifest, time.Now())
+	if ifRevision != "" && manifest.Revision == ifRevision {
+		w.Header().Set("X-Agentbox-Revision", manifest.Revision)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	writeJSON(w, http.StatusOK, manifest)
+}
+
+type syncManifestCacheEntry struct {
+	statSig  string
+	manifest syncManifest
+	builtAt  time.Time
+}
+
+type syncManifestCache struct {
+	mu      sync.Mutex
+	entries map[string]syncManifestCacheEntry
+}
+
+func (c *syncManifestCache) get(projectID, statSig string, now time.Time) (syncManifest, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[projectID]
+	if !ok || entry.statSig != statSig || now.Sub(entry.builtAt) > time.Minute {
+		return syncManifest{}, false
+	}
+	return entry.manifest, true
+}
+
+func (c *syncManifestCache) put(projectID, statSig string, manifest syncManifest, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = map[string]syncManifestCacheEntry{}
+	}
+	c.entries[projectID] = syncManifestCacheEntry{statSig: statSig, manifest: manifest, builtAt: now}
+}
+
+// statSyncSignature hashes the tree's metadata without reading file contents.
+func (s *Server) statSyncSignature(root *safefs.Root) (string, error) {
+	hash := sha256.New()
+	err := fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if name == "." {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		kind := "file"
+		link := ""
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			kind = "symlink"
+			target, err := root.Readlink(name)
+			if err != nil {
+				return err
+			}
+			link = target
+		case info.IsDir():
+			kind = "dir"
+		}
+		fmt.Fprintf(hash, "%s\x00%s\x00%d\x00%d\x00%s\x00%s\n",
+			filepath.ToSlash(name), kind, info.Size(), uint32(info.Mode().Perm()),
+			info.ModTime().UTC().Format(time.RFC3339Nano), link)
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func (s *Server) handleSyncLease(w http.ResponseWriter, r *http.Request) {
