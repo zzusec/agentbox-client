@@ -49,6 +49,9 @@ try:
         config.write_text(json.dumps({'listen':'0.0.0.0:8180','auth_token':password,
             'data_dir':data,'timezone':'UTC','agent_image':a.image,
             'container':{'network':'none','memory_mb':512,'cpus':1,'pids_limit':128},
+            'proxies':[{'id':'synthetic-proxy','name':'Synthetic Residential','kind':'residential',
+                        'scheme':'http','host':'127.0.0.1','port':1081}],
+            'proxy_bridge':{'bind':'127.0.0.1:1081'},
             'accounts':[{'id':'synthetic','type':'codex','label':'Synthetic test account'}]}))
         server=docker('create','--mount','type=volume,src='+volume+',dst='+data,
             '--mount','type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock',
@@ -76,7 +79,8 @@ try:
         token=request('/api/login',{'username':'boxadmin','password':password})['token']
         assert request('/api/me')['role']=='admin'
         assert b'AGENTBOX' in request('/')
-        sess=request('/api/sessions',{'name':'packaged smoke','agent':'codex','account_id':'synthetic'})
+        sess=request('/api/sessions',{'name':'packaged smoke','codex_account_id':'synthetic',
+                                      'default_agent':'codex','proxy_id':'synthetic-proxy'})
         # Register cleanup by deterministic container name before start can fail.
         sessions.append('agentbox-'+sess['id'])
         started=request('/api/sessions/'+sess['id']+'/start',{},'POST')
@@ -84,7 +88,10 @@ try:
         inspect=json.loads(docker('inspect',cid))[0]
         assert inspect['HostConfig']['NetworkMode']=='none'
         mounts={m['Destination']:m['Source'] for m in inspect['Mounts']}
-        assert set(mounts)=={'/workspace','/home/agent','/shared'}
+        # v11 mounts the workspace twice: the historical /workspace contract and
+        # the server's own absolute path (container paths match host paths).
+        workspace=data+'/users/boxadmin/sessions/'+sess['id']+'/workspace'
+        assert set(mounts)=={'/workspace',workspace,'/home/agent','/shared'},mounts
         assert all(v.startswith(data+'/') for v in mounts.values())
         assert docker('exec','--user','1000:1000',cid,'id','-u')=='1000'
         docker('exec','--user','1000:1000',cid,'git','-C','/workspace','init','-q')
@@ -94,7 +101,8 @@ try:
         assert 'smoke.txt' in json.dumps(status),status
         assert 'packaged server works' in docker('exec','--user','1000:1000',cid,'cat','/workspace/smoke.txt')
         request('/api/settings',{'resources':{'max_running':1,'max_running_per_user':1,'min_free_bytes':0}},'PUT')
-        extra=request('/api/sessions',{'name':'capacity smoke','agent':'codex','account_id':'synthetic'})
+        extra=request('/api/sessions',{'name':'capacity smoke','codex_account_id':'synthetic',
+                                       'default_agent':'codex','proxy_id':'synthetic-proxy'})
         sessions.append('agentbox-'+extra['id'])
         try:
             request('/api/sessions/'+extra['id']+'/start',{},'POST')
