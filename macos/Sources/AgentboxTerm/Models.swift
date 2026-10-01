@@ -59,8 +59,8 @@ struct ProjectSyncSetting: Equatable {
     /// baseline, so the UI has to say so rather than implying a live switch.
     static func policyLabel(_ policy: String?) -> String {
         switch policy {
-        case "server": return "从服务器下载"
-        case "local": return "上传到服务器"
+        case "server": return "从服务器下载到本地"
+        case "local": return "从本地上传到服务器"
         default: return "双向同步（默认）"
         }
     }
