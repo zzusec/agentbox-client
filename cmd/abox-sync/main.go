@@ -161,10 +161,16 @@ func syncOnce(
 			DryRun:        dryRun,
 		}
 		// Report progress so the Mac client's status bar moves on a big tree.
-		// Throttled, but always emitting the final count.
+		// Throttled, but always emitting the final count. The percentage is
+		// carried in the line so both the CLI and the client bar can show it
+		// without recomputing (the client parses "done/total" anyway).
 		engine.Progress = func(done, total int) {
 			if done == total || done%25 == 0 {
-				log.Printf("%s: %d/%d", project.Name, done, total)
+				pct := 0.0
+				if total > 0 {
+					pct = float64(done) / float64(total) * 100
+				}
+				log.Printf("%s: %d/%d (%.0f%%)", project.Name, done, total, pct)
 			}
 		}
 		result, err := engine.SyncProject(ctx, target)
@@ -185,7 +191,11 @@ func syncOnce(
 				log.Printf("%s: %s", project.Name, line)
 			}
 		} else if result.Actions != 0 {
-			log.Printf("%s: applied %d changes", project.Name, result.Actions)
+			log.Printf("%s: 同步完成，应用了 %d 个变更", project.Name, result.Actions)
+		} else if forcePolicy != "" {
+			// A one-shot "sync now" always owes the user a verdict; the
+			// watcher stays quiet on idle passes so the log is not a wall.
+			log.Printf("%s: 已是最新，无需同步", project.Name)
 		}
 	}
 	return nil

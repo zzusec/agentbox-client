@@ -16,10 +16,16 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     private let toolbarSettings = NSToolbarItem.Identifier("agentbox-client.terminal-settings")
     private let statusBar = NSView()
     private let syncSpinner = NSProgressIndicator()
+    /// A determinate bar shown once the engine reports "done/total", so a big
+    /// download or upload reads as a real percentage instead of an endless
+    /// spinner.
+    private let syncBar = NSProgressIndicator()
     private let syncStatusLabel = NSTextField(labelWithString: "")
     /// What the bottom bar currently says, and whether a sync is in flight.
     private(set) var syncStatusText = ""
     private(set) var isSyncing = false
+    /// 0...1 when the engine is reporting counts, nil when it is not.
+    private(set) var syncFraction: Double?
 
     init(client: AgentboxClient) {
         self.client = client
@@ -81,14 +87,25 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         syncSpinner.style = .spinning
         syncSpinner.controlSize = .small
         syncSpinner.isDisplayedWhenStopped = false
+        syncSpinner.isHidden = true
         syncSpinner.translatesAutoresizingMaskIntoConstraints = false
+
+        // Shown once counts arrive; the spinner is only for the window before
+        // that, when the engine knows it is busy but not yet how much work.
+        syncBar.style = .bar
+        syncBar.controlSize = .small
+        syncBar.minValue = 0
+        syncBar.maxValue = 100
+        syncBar.isIndeterminate = false
+        syncBar.isHidden = true
+        syncBar.translatesAutoresizingMaskIntoConstraints = false
 
         syncStatusLabel.font = .systemFont(ofSize: 11)
         syncStatusLabel.textColor = NativeTheme.secondaryText
         syncStatusLabel.lineBreakMode = .byTruncatingMiddle
         syncStatusLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let content = NSStackView(views: [syncSpinner, syncStatusLabel])
+        let content = NSStackView(views: [syncSpinner, syncBar, syncStatusLabel])
         content.orientation = .horizontal
         content.spacing = 8
         content.translatesAutoresizingMaskIntoConstraints = false
@@ -105,33 +122,70 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             content.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
             syncSpinner.widthAnchor.constraint(equalToConstant: 14),
             syncSpinner.heightAnchor.constraint(equalToConstant: 14),
+            syncBar.widthAnchor.constraint(equalToConstant: 130),
         ])
         return statusBar
     }
 
-    /// Shows a sync line in the bottom bar. A trailing "/total" progress line
-    /// also drives the spinner, so a long overwrite visibly moves.
-    func showSyncStatus(_ message: String, busy: Bool = false) {
+    /// Shows a sync line in the bottom bar.
+    ///
+    /// - progress: 0...1 once the engine is counting, which swaps the spinner
+    ///   for a determinate bar so a download or upload reads as a real
+    ///   percentage. Nil means "busy but not counting yet"; busy=false is the
+    ///   finished state, where neither indicator stays up.
+    func showSyncStatus(_ message: String, busy: Bool = false, progress: Double? = nil) {
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
         syncStatusLabel.stringValue = text
         syncStatusLabel.toolTip = text.isEmpty ? nil : "\(text)\n日志：\(SyncManager.logURL.path)"
         syncStatusText = text
         isSyncing = busy
-        if busy {
+        syncFraction = progress
+
+        if let progress {
+            syncSpinner.stopAnimation(nil)
+            syncSpinner.isHidden = true
+            syncBar.isHidden = false
+            syncBar.doubleValue = progress * 100
+        } else if busy {
+            syncBar.isHidden = true
+            syncSpinner.isHidden = false
             syncSpinner.startAnimation(nil)
         } else {
             syncSpinner.stopAnimation(nil)
+            syncSpinner.isHidden = true
+            syncBar.isHidden = true
         }
     }
 
-    /// Routes a line of engine output to the bottom bar. A trailing
-    /// "done/total" is progress and spins the indicator; anything else is a
-    /// result line and stops it.
+    /// Routes a line of engine output to the bottom bar. A "done/total" pair is
+    /// progress and drives the bar; anything else is the verdict and ends it.
     func handleSyncOutput(_ message: String) {
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        let isProgress = text.range(of: #": \d+/\d+$"#, options: .regularExpression) != nil
-        showSyncStatus(text, busy: isProgress)
+
+        // Progress lines look like "项目: 45/820 (5%)".
+        if let counts = parseSyncCounts(text), counts.total > 0 {
+            showSyncStatus(text, busy: true, progress: Double(counts.done) / Double(counts.total))
+            return
+        }
+
+        // A verdict line: mark the finish so it is unmistakable next to the
+        // moving bar it replaces.
+        let settled = text.contains("同步完成") || text.contains("无需同步") || text.contains("已是最新")
+        showSyncStatus(settled ? "✓ \(text)" : text, busy: false)
+    }
+
+    /// Pulls "done/total" out of an engine progress line.
+    private func parseSyncCounts(_ text: String) -> (done: Int, total: Int)? {
+        let pattern = #": (\d+)/(\d+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let doneRange = Range(match.range(at: 1), in: text),
+              let totalRange = Range(match.range(at: 2), in: text),
+              let done = Int(text[doneRange]),
+              let total = Int(text[totalRange])
+        else { return nil }
+        return (done, total)
     }
 
     override func viewDidLoad() {
@@ -702,7 +756,8 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         showSyncStatus("正在以\(label)全量同步「\(project.name)」…", busy: true)
         manager.runForcedPass(project: project.name, policy: policy) { [weak self] result in
             guard let self else { return }
-            self.showSyncStatus("\(project.name)：\(result)")
+            // Through the same router, so a finished line gets its ✓.
+            self.handleSyncOutput("\(project.name)：\(result)")
             // Resume the watcher, unless the user moved to another workspace.
             guard self.workspace?.id == workspace.id, self.syncManager === manager else { return }
             manager.start()
