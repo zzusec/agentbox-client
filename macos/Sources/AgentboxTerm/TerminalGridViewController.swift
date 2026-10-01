@@ -11,6 +11,8 @@ final class TerminalGridViewController: NSViewController {
     private let tabBar = NSStackView()
     private let container = NSView()
     private let emptyState = NSStackView()
+    private let emptyTitle = NSTextField(labelWithString: "选择一个项目开始")
+    private let emptyDetail = NSTextField(labelWithString: "打开的终端会出现在顶部标签里，点 × 收起后实例继续运行。")
     private var terminals: [TerminalViewController] = []
     private var selected: TerminalViewController?
 
@@ -31,12 +33,12 @@ final class TerminalGridViewController: NSViewController {
 
         let icon = NSImageView(image: NativeTheme.symbol("rectangle.grid.2x2", size: 30, weight: .regular) ?? NSImage())
         icon.contentTintColor = NativeTheme.secondaryText
-        let title = NSTextField(labelWithString: "选择一个项目开始")
-        title.font = .systemFont(ofSize: 15, weight: .semibold)
-        title.textColor = NSColor(calibratedWhite: 0.86, alpha: 1)
-        let detail = NSTextField(labelWithString: "打开的终端会出现在顶部标签里，点 × 收起后实例继续运行。")
-        detail.font = .systemFont(ofSize: 12)
-        detail.textColor = NSColor(calibratedWhite: 0.62, alpha: 1)
+        emptyTitle.font = .systemFont(ofSize: 15, weight: .semibold)
+        emptyTitle.textColor = NSColor(calibratedWhite: 0.86, alpha: 1)
+        emptyDetail.font = .systemFont(ofSize: 12)
+        emptyDetail.textColor = NSColor(calibratedWhite: 0.62, alpha: 1)
+        let title = emptyTitle
+        let detail = emptyDetail
         emptyState.setViews([icon, title, detail], in: .top)
         emptyState.orientation = .vertical
         emptyState.alignment = .centerX
@@ -58,7 +60,33 @@ final class TerminalGridViewController: NSViewController {
             emptyState.centerYAnchor.constraint(equalTo: root.centerYAnchor),
         ])
         view = root
+        applySchemeBackground()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(applySchemeBackground),
+            name: TerminalThemeManager.schemeChanged, object: nil
+        )
         updateEmptyState()
+    }
+
+    /// The terminal area (tab strip, container, empty state) follows the
+    /// terminal scheme's background instead of the fixed dark chrome, so a
+    /// light scheme does not clash with the app chrome.
+    @objc private func applySchemeBackground() {
+        let scheme = TerminalThemeManager.current
+        let background = TerminalThemeManager.nsColor(scheme.background)
+        view.layer?.backgroundColor = background.cgColor
+        container.layer?.backgroundColor = background.cgColor
+        let light = scheme.isLight
+        emptyTitle.textColor = light
+            ? NativeTheme.primaryText
+            : NSColor(calibratedWhite: 0.86, alpha: 1)
+        emptyDetail.textColor = light
+            ? NativeTheme.secondaryText
+            : NSColor(calibratedWhite: 0.62, alpha: 1)
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     func contains(workspaceID: String, projectName: String) -> TerminalViewController? {

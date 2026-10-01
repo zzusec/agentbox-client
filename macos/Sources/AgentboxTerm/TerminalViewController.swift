@@ -64,7 +64,27 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         surface.onDropFiles = { [weak self] urls in
             self?.upload(urls)
         }
+        applyTheme()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(applyTheme),
+            name: TerminalThemeManager.schemeChanged, object: nil
+        )
         connect()
+    }
+
+    @objc private func applyTheme() {
+        let scheme = TerminalThemeManager.current
+        surface.nativeBackgroundColor = TerminalThemeManager.nsColor(scheme.background)
+        surface.nativeForegroundColor = TerminalThemeManager.nsColor(scheme.foreground)
+        surface.installColors(scheme.ansi.map { TerminalThemeManager.termColor($0) })
+        if surface.font != TerminalThemeManager.font() {
+            surface.font = TerminalThemeManager.font()
+        }
+        refitPTY()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     override func viewDidAppear() {

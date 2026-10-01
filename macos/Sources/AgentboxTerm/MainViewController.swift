@@ -13,6 +13,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     private var sidebarCollapsed = false
     private var sidebarWidth: CGFloat = 270
     private let toolbarSidebar = NSToolbarItem.Identifier("agentbox-client.sidebar")
+    private let toolbarSettings = NSToolbarItem.Identifier("agentbox-client.terminal-settings")
 
     init(client: AgentboxClient) {
         self.client = client
@@ -390,11 +391,11 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [toolbarSidebar, .flexibleSpace]
+        [toolbarSidebar, .flexibleSpace, toolbarSettings]
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [toolbarSidebar, .flexibleSpace]
+        [toolbarSidebar, .flexibleSpace, toolbarSettings]
     }
 
     func toolbar(
@@ -402,15 +403,29 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
         willBeInsertedIntoToolbar flag: Bool
     ) -> NSToolbarItem? {
-        guard itemIdentifier == toolbarSidebar else { return nil }
+        if itemIdentifier == toolbarSidebar {
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "项目栏"
+            item.paletteLabel = "显示或隐藏项目栏"
+            item.toolTip = "显示或隐藏项目栏"
+            item.image = NativeTheme.symbol("sidebar.left", size: 15, weight: .medium)
+            item.target = self
+            item.action = #selector(toggleSidebar(_:))
+            return item
+        }
+        guard itemIdentifier == toolbarSettings else { return nil }
         let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-        item.label = "项目栏"
-        item.paletteLabel = "显示或隐藏项目栏"
-        item.toolTip = "显示或隐藏项目栏"
-        item.image = NativeTheme.symbol("sidebar.left", size: 15, weight: .medium)
+        item.label = "终端设置"
+        item.paletteLabel = "终端设置"
+        item.toolTip = "终端配色与字号"
+        item.image = NativeTheme.symbol("paintpalette", size: 15, weight: .medium)
         item.target = self
-        item.action = #selector(toggleSidebar(_:))
+        item.action = #selector(openTerminalSettings)
         return item
+    }
+
+    @objc private func openTerminalSettings() {
+        presentAsSheet(TerminalSettingsViewController())
     }
 
     func splitView(
