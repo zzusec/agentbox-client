@@ -73,6 +73,9 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         sidebar.onChangeProjectPolicy = { [weak self] project, policy in
             self?.changeProjectPolicy(project, policy: policy)
         }
+        sidebar.onSyncProjectNow = { [weak self] project, policy in
+            self?.syncProjectNow(project, policy: policy)
+        }
         sidebar.projectPolicyForDisplay = { [weak self] project in
             guard let self, let workspace = self.workspace else { return nil }
             return self.projectSettings(for: workspace)[project.id]?.policy
@@ -546,6 +549,57 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         }
         restartSync(workspace)
         sidebar.setStatus("\(project.name) 同步方式：\(ProjectSyncSetting.policyLabel(policy))")
+    }
+
+    /// The ⟳ next to a sync mode: overwrite the other side right now.
+    ///
+    /// This is the only way to make the choice act immediately — the stored
+    /// policy otherwise only applies when a project next builds a baseline.
+    /// It is destructive by design, so it confirms first, and it also stores
+    /// the policy the user picked.
+    private func syncProjectNow(_ project: RemoteProject, policy: String) {
+        guard let workspace, workspace.id == self.workspace?.id else { return }
+        guard let root = UserDefaults.standard.string(forKey: localRootKey(workspace)), !root.isEmpty else {
+            sidebar.setStatus("先选择本地同步目录")
+            return
+        }
+        let label = ProjectSyncSetting.policyLabel(policy)
+        let overwrite = policy == "server"
+            ? "服务器上没有的本地文件会被删除，服务器上的文件会全部下载下来。"
+            : "本地文件会全部上传，服务器上多出的文件会被删除。"
+        let alert = NSAlert()
+        alert.messageText = "立即以\(policy == "server" ? "服务器" : "本地")为准全量同步「\(project.name)」？"
+        alert.informativeText = overwrite
+            + "\n\n这会跳过三路合并，直接按所选一侧覆盖另一侧；"
+            + "同时把该项目的同步方式记为「\(label)」。"
+        alert.addButton(withTitle: "立即同步")
+        alert.addButton(withTitle: "取消")
+        alert.alertStyle = .warning
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        updateProjectSetting(for: workspace, project: project) { setting in
+            setting.policy = policy
+        }
+        let manager = SyncManager(
+            client: client,
+            workspace: workspace,
+            localRoot: URL(fileURLWithPath: root, isDirectory: true),
+            initialPolicy: UserDefaults.standard.string(forKey: initialPolicyKey(workspace)) ?? "",
+            projectSettings: projectSettings(for: workspace)
+        )
+        manager.onStatus = { [weak self] message in
+            self?.sidebar.setStatus(message)
+        }
+        syncManager?.stop()
+        syncManager = manager
+        sidebar.setStatus("正在以\(label)全量同步「\(project.name)」…")
+        manager.runForcedPass(project: project.name, policy: policy) { [weak self] result in
+            guard let self else { return }
+            self.sidebar.setStatus("\(project.name)：\(result)")
+            // Resume the watcher, unless the user moved to another workspace.
+            guard self.workspace?.id == workspace.id, self.syncManager === manager else { return }
+            manager.start()
+        }
     }
 
     private func chooseInitialPolicy(_ workspace: Workspace) -> String? {

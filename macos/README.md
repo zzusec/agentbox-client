@@ -52,7 +52,12 @@ settings:
 - **同步方式 / sync mode** — `修改同步方式` picks which side wins when the
   project has to build a **fresh baseline**: 跟随工作空间, 以服务器为准 or
   以本地为准. This is not a live switch — routine syncs keep three-way merging
-  and pause on real conflicts.
+  and pause on real conflicts. The two real modes also carry a ⟳ that runs a
+  full overwrite **right now**: the watcher stops, one `abox-sync
+  -force-policy` pass overwrites the other side, and the watcher resumes. It
+  confirms first, because 以服务器为准 deletes local files the server lacks
+  (and 以本地为准 deletes server files the local copy lacks), and it records
+  the mode it just applied.
 
 Changing a project's directory discards that project's baseline on purpose. The
 engine records the directory each baseline describes and ignores a baseline

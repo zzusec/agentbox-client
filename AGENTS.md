@@ -593,6 +593,8 @@ data/
 - **基线按目录作废**：`<local_root>/.agentbox-sync/<项目ID>.json` 里存的是 `baseRecord{local_dir, manifest}`，不是裸 `Manifest`。读取时记录的目录与当前目录不一致就当没有基线。这一条是防数据丢失的关键——换了目录还沿用旧基线，会读成「本地全被删了」，然后按 `ActionDeleteRemote` 把服务器文件删掉。旧格式（裸 Manifest）只在项目仍位于 `local_root/项目名` 时才被信任，否则同样作废。
 - 因此改目录/改名的下一次同步是**重新建立基线**，走 `initial_policy`：内容两边一致时 `manifestsEqual` 直接短路、无事发生；两边都有内容且不一致才需要明确的策略，否则报 `InitialConflictError` 并暂停。日常同步仍是三路合并，真冲突暂停而非自动覆盖。
 - `initial_policy` 只在建基线时生效，不是「持续以某侧为准」的开关——不要把它当成能自动解决日常冲突的模式。
+- **`-force-policy local|server` 是一次性覆盖**：`ProjectTarget.ForcePolicy` 非空时跳过基线直接走 `bootstrapPlan`，即「现在就以这一侧覆盖另一侧」——选 server 会删掉服务器上没有的本地文件，选 local 会删掉本地没有的服务器文件。**它被显式禁止与 `-watch` 同用**（否则每一轮都会重新覆盖）。Mac 客户端的「立即同步 ⟳」就是停掉 watcher → 跑一次 `-force-policy` → 再起 watcher。
+- 计划解析统一走 `resolvePlan`：force > 无基线走 initial_policy > 三路合并。不要在别处再写一遍这个分支。
 - Mac 侧每项目设置存在 `UserDefaults`（`ProjectSyncStore`，目录与策略两个字典分开存，避免半截写丢另一半），键是项目 ID；「跟随工作空间」= 条目被删掉，而不是存空值。
 
 ## 代码约定与注意事项

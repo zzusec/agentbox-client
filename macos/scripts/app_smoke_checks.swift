@@ -538,9 +538,11 @@ struct AppSmokeChecks {
         var renamed: RemoteProject?
         var changedDir: RemoteProject?
         var changedPolicy: (project: RemoteProject, policy: String?)?
+        var syncedNow: (project: RemoteProject, policy: String)?
         sidebar.onRenameProject = { renamed = $0 }
         sidebar.onChangeProjectLocalDir = { changedDir = $0 }
         sidebar.onChangeProjectPolicy = { changedPolicy = (project: $0, policy: $1) }
+        sidebar.onSyncProjectNow = { syncedNow = (project: $0, policy: $1) }
         sidebar.projectPolicyForDisplay = { _ in "server" }
 
         let menu = NSMenu()
@@ -554,22 +556,61 @@ struct AppSmokeChecks {
               let policyMenu = policyItem.submenu else {
             preconditionFailure("修改同步方式 must be a submenu")
         }
-        precondition(policyMenu.items.map(\.title) == ["跟随工作空间", "以服务器为准", "以本地为准"])
+        // The sync modes are view-backed rows: a native item can only carry one
+        // click target, and these need two (pick the side, and sync now).
+        let rows = policyMenu.items.compactMap { $0.view as? SyncPolicyMenuRow }
+        precondition(rows.count == 3, "expected three sync modes, got \(rows.count)")
         precondition(
-            policyMenu.items.filter { $0.state == .on }.map(\.title) == ["以服务器为准"],
-            "the project's current policy must be checked"
+            rows.map(\.title) == ["跟随工作空间", "以服务器为准", "以本地为准"],
+            "unexpected sync modes: \(rows.map(\.title))"
+        )
+        precondition(
+            rows.filter(\.isChecked).map(\.title) == ["以服务器为准"],
+            "the project's current policy must be the checked row"
+        )
+        precondition(
+            rows.filter(\.hasSyncNow).map(\.title) == ["以服务器为准", "以本地为准"],
+            "only the two real modes may offer 立即同步"
         )
 
         let renameItem = menu.items.first { $0.title == "修改项目名称…" }!
+        if let output = ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_MENU_IMAGE"] {
+            let size = SyncPolicyMenuRow.rowSize
+            let canvas = NSImage(size: NSSize(width: size.width, height: size.height * CGFloat(rows.count)))
+            canvas.lockFocus()
+            NSColor.windowBackgroundColor.setFill()
+            NSRect(origin: .zero, size: canvas.size).fill()
+            for (index, row) in rows.enumerated() {
+                row.frame = NSRect(origin: .zero, size: size)
+                row.layoutSubtreeIfNeeded()
+                let rowBitmap = row.bitmapImageRepForCachingDisplay(in: row.bounds)!
+                row.cacheDisplay(in: row.bounds, to: rowBitmap)
+                rowBitmap.draw(in: NSRect(
+                    x: 0,
+                    y: size.height * CGFloat(rows.count - 1 - index),
+                    width: size.width,
+                    height: size.height
+                ))
+            }
+            canvas.unlockFocus()
+            let rep = NSBitmapImageRep(data: canvas.tiffRepresentation!)!
+            try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
+        }
         precondition(NSApp.sendAction(renameItem.action!, to: renameItem.target, from: renameItem))
         precondition(renamed?.id == "p1")
         let dirItem = menu.items.first { $0.title == "修改本地工作空间…" }!
         precondition(NSApp.sendAction(dirItem.action!, to: dirItem.target, from: dirItem))
         precondition(changedDir?.id == "p1")
-        let localItem = policyMenu.items.first { $0.title == "以本地为准" }!
-        precondition(NSApp.sendAction(localItem.action!, to: localItem.target, from: localItem))
-        let call = changedPolicy
-        precondition(call != nil && call!.project.id == "p1" && call!.policy == "local")
+
+        // Tapping the row only picks the side...
+        rows[2].select()
+        let picked = changedPolicy
+        precondition(picked != nil && picked!.project.id == "p1" && picked!.policy == "local")
+        precondition(syncedNow == nil, "picking a side must not sync on its own")
+        // ...while the ⟳ reports an immediate overwrite for that side.
+        rows[1].performSyncNow()
+        let forced = syncedNow
+        precondition(forced != nil && forced!.project.id == "p1" && forced!.policy == "server")
     }
 
     @MainActor

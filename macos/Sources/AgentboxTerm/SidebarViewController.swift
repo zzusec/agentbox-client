@@ -8,6 +8,8 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     var onRenameProject: ((RemoteProject) -> Void)?
     var onChangeProjectLocalDir: ((RemoteProject) -> Void)?
     var onChangeProjectPolicy: ((RemoteProject, String?) -> Void)?
+    /// The ⟳ beside a sync mode: overwrite the other side immediately.
+    var onSyncProjectNow: ((RemoteProject, String) -> Void)?
     var onOpenProject: ((RemoteProject) -> Void)?
     var onCopyProjectPath: ((RemoteProject) -> Void)?
     var onDeleteProject: ((RemoteProject) -> Void)?
@@ -52,13 +54,6 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     @objc private func changeLocalDirClicked() {
         guard let menuProject else { return }
         onChangeProjectLocalDir?(menuProject)
-    }
-
-    @objc private func changePolicyClicked(_ sender: NSMenuItem) {
-        guard let menuProject else { return }
-        // The tag carries the policy; 0 is "follow the workspace".
-        let policy = sender.tag == 0 ? nil : (sender.tag == 1 ? "server" : "local")
-        onChangeProjectPolicy?(menuProject, policy)
     }
 
     @objc private func deleteClicked() {
@@ -449,24 +444,180 @@ extension SidebarViewController: NSMenuDelegate {
     }
 
     /// "修改同步方式" as a submenu, with the project's current choice checked.
+    ///
+    /// The two real modes also carry a ⟳ that overwrites the other side right
+    /// away. A plain NSMenuItem only has one click target, so those rows are
+    /// view-backed: the label picks the side, the ⟳ acts on it immediately.
     private func policyItem(for project: RemoteProject) -> NSMenuItem {
         let current = projectPolicyForDisplay?(project) ?? nil
         let parent = NSMenuItem(title: "修改同步方式", action: nil, keyEquivalent: "")
         parent.image = NativeTheme.symbol("arrow.triangle.2.circlepath", size: 13, weight: .medium)
         let submenu = NSMenu()
-        let options: [(String, Int, String?)] = [
-            ("跟随工作空间", 0, nil),
-            ("以服务器为准", 1, "server"),
-            ("以本地为准", 2, "local"),
+
+        let options: [(String, String?)] = [
+            ("跟随工作空间", nil),
+            ("以服务器为准", "server"),
+            ("以本地为准", "local"),
         ]
-        for (title, tag, policy) in options {
-            let entry = NSMenuItem(title: title, action: #selector(changePolicyClicked(_:)), keyEquivalent: "")
-            entry.target = self
-            entry.tag = tag
-            entry.state = current == policy ? .on : .off
-            submenu.addItem(entry)
+        for (title, policy) in options {
+            let item = NSMenuItem()
+            let row = SyncPolicyMenuRow(
+                title: title,
+                checked: current == policy,
+                onSelect: { [weak self] in self?.onChangeProjectPolicy?(project, policy) },
+                onSyncNow: policy.map { policy in
+                    { [weak self] in self?.onSyncProjectNow?(project, policy) }
+                }
+            )
+            item.view = row
+            submenu.addItem(item)
         }
         parent.submenu = submenu
         return parent
+    }
+}
+
+/// One row of the 修改同步方式 submenu.
+///
+/// A plain NSMenuItem has a single click target, so a row that both picks a
+/// side and offers "sync now" has to be a view-backed item: the label selects,
+/// the trailing ⟳ overwrites immediately. Because the view covers the item,
+/// AppKit draws no selection behind it, so the row highlights itself on hover
+/// and switches to the selected text colour while it does.
+final class SyncPolicyMenuRow: NSView {
+    static let rowSize = NSSize(width: 224, height: 24)
+
+    let title: String
+    private(set) var isChecked: Bool
+    /// Whether this row carries the ⟳ (only the two real modes do).
+    var hasSyncNow: Bool { onSyncNow != nil }
+
+    private let checkmark = NSImageView()
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let syncButton = NSButton()
+    private var trackingArea: NSTrackingArea?
+    private let onSelect: () -> Void
+    private let onSyncNow: (() -> Void)?
+
+    private var isHovered = false {
+        didSet {
+            guard isHovered != oldValue else { return }
+            applyColors()
+            needsDisplay = true
+        }
+    }
+
+    init(
+        title: String,
+        checked: Bool,
+        onSelect: @escaping () -> Void,
+        onSyncNow: (() -> Void)?
+    ) {
+        self.title = title
+        self.isChecked = checked
+        self.onSelect = onSelect
+        self.onSyncNow = onSyncNow
+        super.init(frame: NSRect(origin: .zero, size: Self.rowSize))
+        wantsLayer = true
+
+        checkmark.image = NativeTheme.symbol("checkmark", size: 11, weight: .semibold)
+        checkmark.translatesAutoresizingMaskIntoConstraints = false
+        checkmark.isHidden = !checked
+
+        titleLabel.stringValue = title
+        titleLabel.font = .menuFont(ofSize: 0)
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        syncButton.isBordered = false
+        syncButton.bezelStyle = .inline
+        syncButton.imagePosition = .imageOnly
+        syncButton.image = NativeTheme.symbol("arrow.triangle.2.circlepath", size: 12, weight: .semibold)
+        syncButton.translatesAutoresizingMaskIntoConstraints = false
+        syncButton.isHidden = onSyncNow == nil
+        syncButton.toolTip = "立即按此方式全量同步（覆盖另一侧）"
+        syncButton.target = self
+        syncButton.action = #selector(syncNowClicked)
+
+        addSubview(checkmark)
+        addSubview(titleLabel)
+        addSubview(syncButton)
+        NSLayoutConstraint.activate([
+            checkmark.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            checkmark.centerYAnchor.constraint(equalTo: centerYAnchor),
+            checkmark.widthAnchor.constraint(equalToConstant: 12),
+
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 34),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            syncButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            syncButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            syncButton.widthAnchor.constraint(equalToConstant: 18),
+            syncButton.heightAnchor.constraint(equalToConstant: 18),
+
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: syncButton.leadingAnchor, constant: -8),
+        ])
+        applyColors()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    /// The menu highlights the whole row, so the label and glyphs have to
+    /// follow the selection colour to stay readable.
+    private func applyColors() {
+        let tint: NSColor = isHovered ? .selectedMenuItemTextColor : .labelColor
+        titleLabel.textColor = tint
+        checkmark.contentTintColor = tint
+        syncButton.contentTintColor = isHovered ? .selectedMenuItemTextColor : .secondaryLabelColor
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = true }
+    override func mouseExited(with event: NSEvent) { isHovered = false }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if isHovered {
+            NSColor.selectedContentBackgroundColor.setFill()
+            NSBezierPath(
+                roundedRect: bounds.insetBy(dx: 5, dy: 0),
+                xRadius: 4,
+                yRadius: 4
+            ).fill()
+        }
+        super.draw(dirtyRect)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        select()
+    }
+
+    @objc private func syncNowClicked() {
+        performSyncNow()
+    }
+
+    /// Exposed so the smoke checks can exercise both targets without a real
+    /// click; the menu only ever runs these under a live right-click.
+    func select() {
+        onSelect()
+        enclosingMenuItem?.menu?.cancelTracking()
+    }
+
+    func performSyncNow() {
+        onSyncNow?()
+        enclosingMenuItem?.menu?.cancelTracking()
     }
 }

@@ -83,6 +83,11 @@ type ProjectTarget struct {
 	// baseline and both sides have content: "local" or "server". Empty means
 	// "ask the caller" and surfaces as an InitialConflictError.
 	InitialPolicy string
+	// ForcePolicy, when set, reconciles the project as if it were bootstrapping
+	// and lets that side overwrite the other. It is how an explicit "sync now,
+	// server (or local) wins" is expressed: the baseline is ignored for this
+	// pass and replaced by whatever the forced policy produces.
+	ForcePolicy string
 }
 
 func (e *Engine) SyncProject(ctx context.Context, target ProjectTarget) (SyncResult, error) {
@@ -132,11 +137,9 @@ func (e *Engine) SyncProject(ctx context.Context, target ProjectTarget) (SyncRes
 	}
 
 	var plan Plan
-	if !hasBase {
-		plan, err = bootstrapPlan(project.Name, target.InitialPolicy, local, remote)
-	} else {
-		plan = BuildPlan(Entries(base), Entries(local), Entries(remote))
-	}
+	plan, err = resolvePlan(
+		project.Name, base, hasBase, local, remote, target.ForcePolicy, target.InitialPolicy,
+	)
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -175,11 +178,9 @@ func (e *Engine) SyncProject(ctx context.Context, target ProjectTarget) (SyncRes
 		return SyncResult{}, err
 	}
 	remote.ServerRevision = leaseRawRevision
-	if !hasBase {
-		plan, err = bootstrapPlan(project.Name, target.InitialPolicy, local, remote)
-	} else {
-		plan = BuildPlan(Entries(base), Entries(local), Entries(remote))
-	}
+	plan, err = resolvePlan(
+		project.Name, base, hasBase, local, remote, target.ForcePolicy, target.InitialPolicy,
+	)
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -224,6 +225,28 @@ func (e *Engine) SyncProject(ctx context.Context, target ProjectTarget) (SyncRes
 	}
 	e.rememberRemote(project.ID, finalRemote)
 	return SyncResult{Project: project.Name, Actions: len(plan.Actions)}, nil
+}
+
+// resolvePlan picks how one pass reconciles a project. A forced policy wins
+// over everything: it resolves the project as if it were bootstrapping, which
+// is exactly what "sync now, this side wins" means and is why it can delete
+// files the user still has. Otherwise a project with no usable baseline
+// bootstraps under its initial policy, and everything else merges three-way.
+func resolvePlan(
+	name string,
+	base Manifest,
+	hasBase bool,
+	local, remote Manifest,
+	forcePolicy, initialPolicy string,
+) (Plan, error) {
+	switch {
+	case forcePolicy != "":
+		return bootstrapPlan(name, forcePolicy, local, remote)
+	case !hasBase:
+		return bootstrapPlan(name, initialPolicy, local, remote)
+	default:
+		return BuildPlan(Entries(base), Entries(local), Entries(remote)), nil
+	}
 }
 
 func bootstrapPlan(name, policy string, local, remote Manifest) (Plan, error) {

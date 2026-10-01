@@ -46,7 +46,14 @@ func main() {
 	watch := flag.Bool("watch", false, "keep polling and syncing until interrupted")
 	projectFlag := flag.String("project", "", "sync only this project name")
 	initialPolicy := flag.String("initial-policy", "", "initial side when both copies exist: local or server")
+	forcePolicy := flag.String("force-policy", "", "one pass that lets this side overwrite the other: local or server")
 	flag.Parse()
+
+	// A forced policy is a deliberate, destructive one-shot. Refuse to combine
+	// it with -watch, which would re-overwrite on every tick.
+	if *forcePolicy != "" && *watch {
+		fatal(errors.New("-force-policy is a one-shot; it cannot be combined with -watch"))
+	}
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
@@ -60,6 +67,9 @@ func main() {
 	}
 	if *initialPolicy != "" {
 		cfg.InitialPolicy = *initialPolicy
+	}
+	if *forcePolicy != "" && *forcePolicy != "local" && *forcePolicy != "server" {
+		fatal(errors.New("force-policy must be local or server"))
 	}
 	if cfg.DeviceID == "" {
 		cfg.DeviceID, err = randomID()
@@ -93,7 +103,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if !*watch {
-		if err := syncOnce(ctx, client, engine, cfg); err != nil {
+		if err := syncOnce(ctx, client, engine, cfg, *forcePolicy); err != nil {
 			fatal(err)
 		}
 		return
@@ -101,7 +111,7 @@ func main() {
 	ticker := time.NewTicker(time.Duration(cfg.IntervalSeconds) * time.Second)
 	defer ticker.Stop()
 	for {
-		if err := syncOnce(ctx, client, engine, cfg); err != nil {
+		if err := syncOnce(ctx, client, engine, cfg, ""); err != nil {
 			log.Print(err)
 		}
 		select {
@@ -117,6 +127,7 @@ func syncOnce(
 	client *syncclient.Client,
 	engine *syncclient.Engine,
 	cfg config,
+	forcePolicy string,
 ) error {
 	projects, err := client.Projects(ctx, cfg.SessionID)
 	if err != nil {
@@ -141,6 +152,7 @@ func syncOnce(
 			LocalDir:      projectLocalDir(cfg, project),
 			StateRoot:     cfg.LocalRoot,
 			InitialPolicy: projectInitialPolicy(cfg, project),
+			ForcePolicy:   forcePolicy,
 		}
 		result, err := engine.SyncProject(ctx, target)
 		if err != nil {

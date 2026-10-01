@@ -10,6 +10,7 @@ final class SyncManager {
     private let projectSettings: [String: ProjectSyncSetting]
     private var process: Process?
     private var output: Pipe?
+    private var configURL: URL?
 
     init(
         client: AgentboxClient,
@@ -33,6 +34,7 @@ final class SyncManager {
         }
         do {
             let config = try writeConfig()
+            configURL = config
             let process = Process()
             process.executableURL = executable
             process.arguments = ["-config", config.path, "-watch"]
@@ -65,6 +67,57 @@ final class SyncManager {
             process.terminate()
         }
         process = nil
+    }
+
+    /// Runs a single forced-overwrite pass for one project and reports what the
+    /// engine printed.
+    ///
+    /// The watcher must already be stopped and restarted by the caller: two
+    /// engines syncing the same project at once would fight over the lease and
+    /// the baseline. `-force-policy` is deliberately a one-shot flag — the
+    /// engine refuses to combine it with `-watch`, because it overwrites the
+    /// other side every time it runs.
+    func runForcedPass(project: String, policy: String, completion: @escaping (String) -> Void) {
+        guard let executable = Bundle.main.url(forResource: "abox-sync", withExtension: nil) else {
+            completion("找不到 abox-sync；请使用 build-app.sh 生成完整应用")
+            return
+        }
+        guard let config = configURL ?? (try? writeConfig()) else {
+            completion("无法写入同步配置")
+            return
+        }
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = [
+            "-config", config.path,
+            "-project", project,
+            "-force-policy", policy,
+        ]
+        process.environment = ProcessInfo.processInfo.environment.merging([
+            "AGENTBOX_TOKEN": client.token,
+        ]) { _, new in new }
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try process.run()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                let text = (String(data: data, encoding: .utf8) ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let status = process.terminationStatus
+                DispatchQueue.main.async {
+                    if status == 0 {
+                        completion(text.isEmpty ? "全量同步完成" : text)
+                    } else {
+                        completion(text.isEmpty ? "全量同步失败（退出码 \(status)）" : text)
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async { completion("全量同步启动失败：\(error.localizedDescription)") }
+            }
+        }
     }
 
     private func writeConfig() throws -> URL {
