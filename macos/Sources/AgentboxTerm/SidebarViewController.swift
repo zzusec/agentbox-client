@@ -10,6 +10,8 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     var onChangeProjectPolicy: ((RemoteProject, String?) -> Void)?
     /// The ⟳ beside a sync mode: overwrite the other side immediately.
     var onSyncProjectNow: ((RemoteProject, String) -> Void)?
+    /// Reveals the sync log, which is the only durable record of what a pass did.
+    var onOpenSyncLog: (() -> Void)?
     var onOpenProject: ((RemoteProject) -> Void)?
     var onCopyProjectPath: ((RemoteProject) -> Void)?
     var onDeleteProject: ((RemoteProject) -> Void)?
@@ -59,6 +61,10 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     @objc private func deleteClicked() {
         guard let menuProject else { return }
         afterMenuCloses { [weak self] in self?.onDeleteProject?(menuProject) }
+    }
+
+    @objc private func openSyncLogClicked() {
+        afterMenuCloses { [weak self] in self?.onOpenSyncLog?() }
     }
 
     /// Runs a project-menu action once the menu has closed.
@@ -449,6 +455,7 @@ extension SidebarViewController: NSMenuDelegate {
         menu.addItem(item("修改项目名称…", "pencil", #selector(renameClicked)))
         menu.addItem(item("修改本地工作空间…", "folder", #selector(changeLocalDirClicked)))
         menu.addItem(policyItem(for: project))
+        menu.addItem(item("打开同步日志", "doc.text.magnifyingglass", #selector(openSyncLogClicked)))
         menu.addItem(.separator())
         menu.addItem(item("删除…", "trash", #selector(deleteClicked), red: true))
     }

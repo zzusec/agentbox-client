@@ -114,7 +114,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     func showSyncStatus(_ message: String, busy: Bool = false) {
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
         syncStatusLabel.stringValue = text
-        syncStatusLabel.toolTip = text
+        syncStatusLabel.toolTip = text.isEmpty ? nil : "\(text)\n日志：\(SyncManager.logURL.path)"
         syncStatusText = text
         isSyncing = busy
         if busy {
@@ -162,6 +162,9 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         }
         sidebar.onSyncProjectNow = { [weak self] project, policy in
             self?.syncProjectNow(project, policy: policy)
+        }
+        sidebar.onOpenSyncLog = {
+            NSWorkspace.shared.activateFileViewerSelecting([SyncManager.logURL])
         }
         sidebar.projectPolicyForDisplay = { [weak self] project in
             guard let self, let workspace = self.workspace else { return nil }

@@ -51,6 +51,8 @@ type SyncResult struct {
 	Project   string
 	Actions   int
 	Conflicts []string
+	// Planned is the human-readable plan, filled in only for a dry run.
+	Planned []string
 }
 
 type InitialConflictError struct {
@@ -94,6 +96,11 @@ type ProjectTarget struct {
 	// server (or local) wins" is expressed: the baseline is ignored for this
 	// pass and replaced by whatever the forced policy produces.
 	ForcePolicy string
+	// DryRun stops after planning. It reports what a pass would do without
+	// taking a lease, touching a file or moving the baseline, which is the
+	// only way to answer "why does this file keep coming back?" on a live
+	// machine.
+	DryRun bool
 }
 
 func (e *Engine) SyncProject(ctx context.Context, target ProjectTarget) (SyncResult, error) {
@@ -148,6 +155,14 @@ func (e *Engine) SyncProject(ctx context.Context, target ProjectTarget) (SyncRes
 	)
 	if err != nil {
 		return SyncResult{}, err
+	}
+	if target.DryRun {
+		return SyncResult{
+			Project:   project.Name,
+			Actions:   len(plan.Actions),
+			Conflicts: plan.Conflicts,
+			Planned:   describePlan(plan),
+		}, nil
 	}
 	if len(plan.Conflicts) != 0 {
 		return SyncResult{Project: project.Name, Conflicts: plan.Conflicts},
@@ -231,6 +246,19 @@ func (e *Engine) SyncProject(ctx context.Context, target ProjectTarget) (SyncRes
 	}
 	e.rememberRemote(project.ID, finalRemote)
 	return SyncResult{Project: project.Name, Actions: len(plan.Actions)}, nil
+}
+
+// describePlan renders a plan for a dry run: what would be deleted, uploaded
+// or downloaded, and what stopped because both sides changed.
+func describePlan(plan Plan) []string {
+	out := make([]string, 0, len(plan.Actions)+len(plan.Conflicts))
+	for _, path := range plan.Conflicts {
+		out = append(out, "conflict      "+path)
+	}
+	for _, action := range plan.Actions {
+		out = append(out, fmt.Sprintf("%-13s %s", action.Type, action.Entry.Path))
+	}
+	return out
 }
 
 // resolvePlan picks how one pass reconciles a project. A forced policy wins

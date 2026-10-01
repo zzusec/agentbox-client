@@ -599,6 +599,12 @@ data/
 - **路由里的查询串必须拆进 `URL.RawQuery`**：`Client.request` 收到的 route 形如 `…/file?path=x`，直接赋给 `URL.Path` 会把 `?` 转义成 `%3F`，查询串变成路径的一部分，服务端 `GET /api/sync/projects/{project}/file` 这条 pattern 就永远匹配不上——**所有文件读/写/删全部 404**。`request` 现在用 `url.Parse(route)` 拆开再拼。`TestFileRequestsCarryPathAsAQuery` 钉死。
 - `internal/syncclient/sync_e2e_test.go` 里有一个假服务端（manifest/lease/file 三组接口），能端到端跑完整生命周期：自举下载 → 本地改动上传 → 本地删除 → 服务器改动下发 → 强制策略覆盖。**上面两个 bug 都是它抓出来的**，改同步客户端时先跑它。
 - `Engine.Progress(done, total)` 每应用一个动作回调一次，`abox-sync` 按 25 条节流打印 `项目: 已完成/总数`；Mac 客户端靠这条把底部状态栏的转圈动起来（`MainViewController.handleSyncOutput` 用 `: \d+/\d+$` 判定进度行）。
+- **`-dry-run` 是排查「文件为什么又回来了」的唯一手段**：`ProjectTarget.DryRun` 只算计划，
+  不租约、不落盘、不写基线，`SyncResult.Planned` 带出明细（`conflict` / `delete_remote` /
+  `delete_local` / `upload` / `download` + 路径）。对着线上配置跑一次就知道当下会做什么。
+- **同步日志在 `~/Library/Logs/agentbox-client/sync.log`**（Mac 侧 `SyncManager.emit` 把引擎
+  每一行带时间戳追加进去，超 2MB 轮转成 `.1`）。状态栏只显示最后一行，没有日志就无法回溯
+  「刚才那一下到底做了什么」。项目右键菜单里有「打开同步日志」。
 - Mac 侧每项目设置存在 `UserDefaults`（`ProjectSyncStore`，目录与策略两个字典分开存，避免半截写丢另一半），键是项目 ID；「跟随工作空间」= 条目被删掉，而不是存空值。
 
 ## 代码约定与注意事项

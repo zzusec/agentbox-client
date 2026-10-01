@@ -551,6 +551,12 @@ struct AppSmokeChecks {
         precondition(titles.contains("修改项目名称…"), "menu must offer renaming: \(titles)")
         precondition(titles.contains("修改本地工作空间…"), "menu must offer the local workspace: \(titles)")
         precondition(titles.contains("修改同步方式"), "menu must offer the sync mode: \(titles)")
+        precondition(titles.contains("打开同步日志"), "menu must offer the sync log: \(titles)")
+        // The log is the only durable record of what a pass did.
+        precondition(
+            SyncManager.logURL.path.hasSuffix("/Library/Logs/agentbox-client/sync.log"),
+            "unexpected sync log path: \(SyncManager.logURL.path)"
+        )
 
         guard let policyItem = menu.items.first(where: { $0.title == "修改同步方式" }),
               let policyMenu = policyItem.submenu else {

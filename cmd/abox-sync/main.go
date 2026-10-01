@@ -47,12 +47,16 @@ func main() {
 	projectFlag := flag.String("project", "", "sync only this project name")
 	initialPolicy := flag.String("initial-policy", "", "initial side when both copies exist: local or server")
 	forcePolicy := flag.String("force-policy", "", "one pass that lets this side overwrite the other: local or server")
+	dryRun := flag.Bool("dry-run", false, "print what a pass would do, without touching anything")
 	flag.Parse()
 
 	// A forced policy is a deliberate, destructive one-shot. Refuse to combine
 	// it with -watch, which would re-overwrite on every tick.
 	if *forcePolicy != "" && *watch {
 		fatal(errors.New("-force-policy is a one-shot; it cannot be combined with -watch"))
+	}
+	if *dryRun && *watch {
+		fatal(errors.New("-dry-run is a one-shot; it cannot be combined with -watch"))
 	}
 
 	cfg, err := loadConfig(*configPath)
@@ -103,7 +107,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if !*watch {
-		if err := syncOnce(ctx, client, engine, cfg, *forcePolicy); err != nil {
+		if err := syncOnce(ctx, client, engine, cfg, *forcePolicy, *dryRun); err != nil {
 			fatal(err)
 		}
 		return
@@ -111,7 +115,7 @@ func main() {
 	ticker := time.NewTicker(time.Duration(cfg.IntervalSeconds) * time.Second)
 	defer ticker.Stop()
 	for {
-		if err := syncOnce(ctx, client, engine, cfg, ""); err != nil {
+		if err := syncOnce(ctx, client, engine, cfg, "", false); err != nil {
 			log.Print(err)
 		}
 		select {
@@ -128,6 +132,7 @@ func syncOnce(
 	engine *syncclient.Engine,
 	cfg config,
 	forcePolicy string,
+	dryRun bool,
 ) error {
 	projects, err := client.Projects(ctx, cfg.SessionID)
 	if err != nil {
@@ -153,6 +158,7 @@ func syncOnce(
 			StateRoot:     cfg.LocalRoot,
 			InitialPolicy: projectInitialPolicy(cfg, project),
 			ForcePolicy:   forcePolicy,
+			DryRun:        dryRun,
 		}
 		// Report progress so the Mac client's status bar moves on a big tree.
 		// Throttled, but always emitting the final count.
@@ -171,7 +177,14 @@ func syncOnce(
 			}
 			return fmt.Errorf("%s: %w", project.Name, err)
 		}
-		if result.Actions != 0 {
+		if dryRun {
+			if len(result.Planned) == 0 && len(result.Conflicts) == 0 {
+				log.Printf("%s: in sync, nothing to do", project.Name)
+			}
+			for _, line := range result.Planned {
+				log.Printf("%s: %s", project.Name, line)
+			}
+		} else if result.Actions != 0 {
 			log.Printf("%s: applied %d changes", project.Name, result.Actions)
 		}
 	}

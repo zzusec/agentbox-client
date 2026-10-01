@@ -11,6 +11,9 @@ final class SyncManager {
     private var process: Process?
     private var output: Pipe?
     private var configURL: URL?
+    private static let logQueue = DispatchQueue(label: "agentbox.sync.log")
+    private static let logStamp = ISO8601DateFormatter()
+    private static let logLimit = 2_000_000
 
     init(
         client: AgentboxClient,
@@ -47,16 +50,14 @@ final class SyncManager {
             pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
                 let data = handle.availableData
                 guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-                DispatchQueue.main.async {
-                    self?.onStatus?(text.trimmingCharacters(in: .whitespacesAndNewlines))
-                }
+                self?.emit(text)
             }
             try process.run()
             self.process = process
             self.output = pipe
-            onStatus?("同步已启动：\(localRoot.path)")
+            emit("同步已启动：\(localRoot.path)")
         } catch {
-            onStatus?("同步启动失败：\(error.localizedDescription)")
+            emit("同步启动失败：\(error.localizedDescription)")
         }
     }
 
@@ -64,9 +65,55 @@ final class SyncManager {
         output?.fileHandleForReading.readabilityHandler = nil
         output = nil
         if let process, process.isRunning {
+            emit("同步已停止")
             process.terminate()
         }
         process = nil
+    }
+
+    /// Forwards one line of engine output to the UI and to the log file.
+    ///
+    /// The log matters more than it looks: the status bar only ever shows the
+    /// last line, so without it "why did this file come back?" has no answer
+    /// once the pass is over.
+    private func emit(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        appendToLog(trimmed)
+        DispatchQueue.main.async { [weak self] in
+            self?.onStatus?(trimmed)
+        }
+    }
+
+    private func appendToLog(_ message: String) {
+        let stamp = Self.logStamp.string(from: Date())
+        guard let data = "\(stamp) \(message)\n".data(using: .utf8) else { return }
+        Self.logQueue.async {
+            let manager = FileManager.default
+            let directory = manager.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Logs/agentbox-client", isDirectory: true)
+            try? manager.createDirectory(at: directory, withIntermediateDirectories: true)
+            let log = directory.appendingPathComponent("sync.log")
+            let size = (try? manager.attributesOfItem(atPath: log.path))?[.size] as? Int ?? 0
+            if size > Self.logLimit {
+                let previous = directory.appendingPathComponent("sync.log.1")
+                try? manager.removeItem(at: previous)
+                try? manager.moveItem(at: log, to: previous)
+            }
+            if let handle = try? FileHandle(forWritingTo: log) {
+                defer { try? handle.close() }
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: data)
+            } else {
+                try? data.write(to: log)
+            }
+        }
+    }
+
+    /// Where the sync log lives, for the UI to point at.
+    static var logURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/agentbox-client/sync.log")
     }
 
     /// Runs a single forced-overwrite pass for one project and reports what the
@@ -112,9 +159,7 @@ final class SyncManager {
             lock.lock()
             collected += text
             lock.unlock()
-            DispatchQueue.main.async {
-                self?.onStatus?(text.trimmingCharacters(in: .whitespacesAndNewlines))
-            }
+            self?.emit(text)
         }
         DispatchQueue.global(qos: .userInitiated).async {
             do {

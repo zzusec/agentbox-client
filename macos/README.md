@@ -91,6 +91,17 @@ the engine's latest line and spins while a pass is in flight — a line ending i
 directory; without one the bar says so, and picking ⟳ on a sync mode offers to
 choose one instead of quietly doing nothing.
 
+Every line also lands in `~/Library/Logs/agentbox-client/sync.log` (rotated at
+2 MB). The status bar only keeps the last line, so the log is the only way to
+answer "what did sync just do to that file?" afterwards. `打开同步日志` in the
+project menu reveals it.
+
+To ask what a pass *would* do without touching anything:
+
+```bash
+abox-sync -config ~/Library/Application\ Support/agentbox-client/sync-<id>.json -dry-run
+```
+
 ## Development
 
 ```bash
