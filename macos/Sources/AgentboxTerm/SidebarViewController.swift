@@ -69,7 +69,7 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
         let brandTitle = NSTextField(labelWithString: "agentbox-client")
         brandTitle.font = .systemFont(ofSize: 15, weight: .semibold)
         brandTitle.textColor = NativeTheme.primaryText
-        let brandSubtitle = NSTextField(labelWithString: "Claude 项目终端")
+        let brandSubtitle = NSTextField(labelWithString: "项目终端")
         brandSubtitle.font = .systemFont(ofSize: 11)
         brandSubtitle.textColor = NativeTheme.secondaryText
         let brandText = NSStackView(views: [brandTitle, brandSubtitle])
@@ -81,7 +81,7 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
         brand.spacing = 10
         brand.alignment = .centerY
 
-        let workspaceLabel = sectionLabel("工作空间")
+        let workspaceLabel = sectionLabel("实例")
         configureWorkspacePicker()
 
         let projectsTitle = sectionLabel("项目")
@@ -156,9 +156,9 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     func setWorkspaces(_ workspaces: [Workspace]) {
         self.workspaces = workspaces
         workspacePicker.removeAllItems()
-        workspacePicker.addItems(withTitles: workspaces.map { "\($0.name) · \($0.accountLabel)" })
+        workspacePicker.addItems(withTitles: workspaces.map { "\($0.name) · \($0.toolsLabel)" })
         workspacePicker.isEnabled = !workspaces.isEmpty
-        status.stringValue = workspaces.isEmpty ? "没有可用工作空间" : ""
+        status.stringValue = workspaces.isEmpty ? "没有可用实例" : ""
         if !workspaces.isEmpty {
             workspacePicker.selectItem(at: 0)
             onSelectWorkspace?(workspaces[0])

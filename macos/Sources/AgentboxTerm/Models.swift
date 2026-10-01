@@ -6,11 +6,31 @@ struct Workspace: Decodable, Identifiable {
     let agent: String
     let accountID: String
     let accountLabel: String
+    let claudeAccountID: String?
+    let claudeAccountLabel: String?
+    let codexAccountID: String?
+    let codexAccountLabel: String?
 
     enum CodingKeys: String, CodingKey {
         case id, name, agent
         case accountID = "account_id"
         case accountLabel = "account_label"
+        case claudeAccountID = "claude_account_id"
+        case claudeAccountLabel = "claude_account_label"
+        case codexAccountID = "codex_account_id"
+        case codexAccountLabel = "codex_account_label"
+    }
+
+    /// An instance (a container VM) binds Claude, Codex or both; the picker
+    /// shows the bound tools next to the instance name.
+    var toolsLabel: String {
+        var tools: [String] = []
+        if claudeAccountID?.isEmpty == false { tools.append("Claude") }
+        if codexAccountID?.isEmpty == false { tools.append("Codex") }
+        if tools.isEmpty {
+            return agent == "codex" ? "Codex" : "Claude"
+        }
+        return tools.joined(separator: " + ")
     }
 }
 

@@ -40,7 +40,7 @@ final class PairingWindowController: NSWindowController {
         title.font = .systemFont(ofSize: 25, weight: .semibold)
         title.textColor = NativeTheme.primaryText
         title.alignment = .center
-        let subtitle = NSTextField(labelWithString: "粘贴网页生成的配对码，连接你的 Claude 工作空间。")
+        let subtitle = NSTextField(labelWithString: "粘贴网页生成的配对码，连接你的 agentbox 实例。。")
         subtitle.font = .systemFont(ofSize: 13)
         subtitle.textColor = NativeTheme.secondaryText
         subtitle.alignment = .center

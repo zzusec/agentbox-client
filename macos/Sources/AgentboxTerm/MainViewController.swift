@@ -151,7 +151,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             select(first)
         }
         guard let workspace else {
-            sidebar.setStatus("请先选择工作空间")
+            sidebar.setStatus("请先选择实例")
             return
         }
         let panel = NSOpenPanel()
