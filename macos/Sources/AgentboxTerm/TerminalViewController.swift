@@ -4,6 +4,11 @@ import SwiftTerm
 final class TerminalViewController: NSViewController, TerminalViewDelegate {
     let workspace: Workspace
     let project: RemoteProject
+    let paneKey: String
+    /// Dismiss the pane to the background (the instance keeps running).
+    var onClose: (() -> Void)?
+    /// The pane header was used as a drop target for another pane's key.
+    var onReorder: ((String, String) -> Void)?
 
     private let client: AgentboxClient
     private let surface: TerminalSurface
@@ -15,6 +20,7 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         self.client = client
         self.workspace = workspace
         self.project = project
+        self.paneKey = "\(workspace.id)/\(project.name)"
         self.surface = TerminalSurface(
             frame: .zero,
             font: NativeTheme.terminalFont()
@@ -31,7 +37,12 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         root.wantsLayer = true
         root.layer?.backgroundColor = NativeTheme.terminalBackground.cgColor
 
-        let header = NSView()
+        let header = PaneHeader()
+        header.paneKey = paneKey
+        header.onDropPane = { [weak self] draggedKey in
+            guard let self else { return }
+            self.onReorder?(draggedKey, self.paneKey)
+        }
         header.wantsLayer = true
         header.layer?.backgroundColor = NativeTheme.terminalHeader.cgColor
         header.translatesAutoresizingMaskIntoConstraints = false
@@ -79,9 +90,23 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         status.spacing = 6
         status.alignment = .centerY
 
+        let closeButton = NSButton()
+        closeButton.isBordered = false
+        closeButton.image = NativeTheme.symbol("xmark", size: 12, weight: .semibold)
+        closeButton.contentTintColor = NSColor(calibratedWhite: 0.62, alpha: 1)
+        closeButton.toolTip = "收起终端（实例继续运行）"
+        closeButton.target = self
+        closeButton.action = #selector(closeClicked)
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            closeButton.widthAnchor.constraint(equalToConstant: 20),
+            closeButton.heightAnchor.constraint(equalToConstant: 20),
+        ])
+        header.closeButton = closeButton
+
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let headerContent = NSStackView(views: [iconTile, labels, spacer, status])
+        let headerContent = NSStackView(views: [iconTile, labels, spacer, status, closeButton])
         headerContent.orientation = .horizontal
         headerContent.alignment = .centerY
         headerContent.spacing = 10
@@ -129,6 +154,14 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
     func closeSession() {
         bridge?.close()
         bridge = nil
+    }
+
+    func activateTerminal() {
+        view.window?.makeFirstResponder(surface)
+    }
+
+    @objc private func closeClicked() {
+        onClose?()
     }
 
     private func connect() {
@@ -252,4 +285,107 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
     func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
 
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+}
+
+/// Terminal pane header. Doubles as the drag handle for pane reordering: the
+/// whole header is one hit target (labels don't steal events), while the close
+/// button stays clickable. Drop target for another pane's key.
+final class PaneHeader: NSView, NSDraggingSource {
+    static let paneType = NSPasteboard.PasteboardType("io.agentbox.term.pane")
+
+    var paneKey = ""
+    var onDropPane: ((String) -> Void)?
+    weak var closeButton: NSButton?
+
+    private var mouseDownLocation: NSPoint = .zero
+    private var dragging = false
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let superview else { return nil }
+        let local = convert(point, from: superview)
+        guard bounds.contains(local) else { return nil }
+        if let closeButton {
+            let buttonPoint = closeButton.convert(local, from: self)
+            if closeButton.bounds.contains(buttonPoint) {
+                return closeButton
+            }
+        }
+        return self
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        mouseDownLocation = convert(event.locationInWindow, from: nil)
+        dragging = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard !dragging else { return }
+        let location = convert(event.locationInWindow, from: nil)
+        guard abs(location.x - mouseDownLocation.x) > 4 || abs(location.y - mouseDownLocation.y) > 4 else { return }
+        dragging = true
+        let item = NSDraggingItem(pasteboardWriter: PaneWriter(key: paneKey))
+        item.setDraggingFrame(bounds, contents: cachedHeaderImage())
+        beginDraggingSession(with: [item], event: event, source: self)
+    }
+
+    private func cachedHeaderImage() -> NSImage? {
+        guard let representation = bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
+        cacheDisplay(in: bounds, to: representation)
+        guard let cgImage = representation.cgImage else { return nil }
+        return NSImage(cgImage: cgImage, size: bounds.size)
+    }
+
+    private func setDropHighlight(_ active: Bool) {
+        layer?.borderWidth = active ? 2 : 0
+        layer?.borderColor = NativeTheme.accent.cgColor
+    }
+
+    // MARK: NSDraggingSource
+
+    func draggingSession(
+        _ session: NSDraggingSession,
+        sourceOperationMaskFor draggingContext: NSDraggingContext
+    ) -> NSDragOperation {
+        .move
+    }
+
+    // MARK: NSDraggingDestination
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard sender.draggingPasteboard.data(forType: Self.paneType) != nil else { return [] }
+        setDropHighlight(true)
+        return .move
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        setDropHighlight(false)
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        setDropHighlight(false)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        setDropHighlight(false)
+        guard let key = sender.draggingPasteboard.string(forType: Self.paneType), key != paneKey else { return false }
+        onDropPane?(key)
+        return true
+    }
+}
+
+private final class PaneWriter: NSObject, NSPasteboardWriting {
+    let key: String
+
+    init(key: String) {
+        self.key = key
+        super.init()
+    }
+
+    func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
+        [PaneHeader.paneType]
+    }
+
+    func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+        type == PaneHeader.paneType ? key : nil
+    }
 }

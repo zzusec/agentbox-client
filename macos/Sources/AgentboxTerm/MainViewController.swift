@@ -60,6 +60,9 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         sidebar.onCreateProject = { [weak self] in
             self?.createProject()
         }
+        terminalGrid.onPaneClosed = { [weak self] terminal in
+            self?.terminals.removeValue(forKey: terminal.paneKey)
+        }
 
         Task { @MainActor in
             do {

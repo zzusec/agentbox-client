@@ -1,6 +1,10 @@
 import AppKit
 
 final class TerminalGridViewController: NSViewController {
+    /// A pane was dismissed to the background; the owner must forget it so the
+    /// project can be reopened from the sidebar.
+    var onPaneClosed: ((TerminalViewController) -> Void)?
+
     private let grid = NSGridView(numberOfColumns: 1, rows: 0)
     private let emptyState = NSStackView()
     private var terminals: [TerminalViewController] = []
@@ -21,7 +25,7 @@ final class TerminalGridViewController: NSViewController {
         let title = NSTextField(labelWithString: "选择一个项目开始")
         title.font = .systemFont(ofSize: 15, weight: .semibold)
         title.textColor = NSColor(calibratedWhite: 0.86, alpha: 1)
-        let detail = NSTextField(labelWithString: "多个终端会自动按网格排列。")
+        let detail = NSTextField(labelWithString: "多个终端会自动按网格排列，拖动标题栏可调整位置；点 × 收起后实例继续运行。")
         detail.font = .systemFont(ofSize: 12)
         detail.textColor = NSColor(calibratedWhite: 0.62, alpha: 1)
         emptyState.setViews([icon, title, detail], in: .top)
@@ -52,10 +56,46 @@ final class TerminalGridViewController: NSViewController {
 
     func add(client: AgentboxClient, workspace: Workspace, project: RemoteProject) -> TerminalViewController {
         let terminal = TerminalViewController(client: client, workspace: workspace, project: project)
+        terminal.onClose = { [weak self, weak terminal] in
+            guard let self, let terminal else { return }
+            self.remove(terminal)
+        }
+        terminal.onReorder = { [weak self] draggedKey, targetKey in
+            self?.reorder(draggedKey: draggedKey, ontoKey: targetKey)
+        }
         addChild(terminal)
         terminals.append(terminal)
         rebuildGrid()
         return terminal
+    }
+
+    /// Dismiss a pane to the background: drop the local connection, keep the
+    /// server-side session running (tmux survives disconnects by contract).
+    func remove(_ terminal: TerminalViewController) {
+        let window = terminal.view.window
+        let firstResponder = window?.firstResponder as? NSView
+        let wasFocused = firstResponder?.isDescendant(of: terminal.view) == true
+        terminal.closeSession()
+        terminals.removeAll { $0 === terminal }
+        terminal.removeFromParent()
+        rebuildGrid()
+        if wasFocused {
+            terminals.first?.activateTerminal()
+        }
+        onPaneClosed?(terminal)
+    }
+
+    /// Drop target semantics: the dragged pane takes the target's slot and the
+    /// target (and everything between) shifts over.
+    func reorder(draggedKey: String, ontoKey: String) {
+        guard draggedKey != ontoKey,
+              let draggedIndex = terminals.firstIndex(where: { $0.paneKey == draggedKey }),
+              terminals.contains(where: { $0.paneKey == ontoKey })
+        else { return }
+        let dragged = terminals.remove(at: draggedIndex)
+        let insertIndex = terminals.firstIndex(where: { $0.paneKey == ontoKey }) ?? 0
+        terminals.insert(dragged, at: insertIndex)
+        rebuildGrid()
     }
 
     private func rebuildGrid() {
