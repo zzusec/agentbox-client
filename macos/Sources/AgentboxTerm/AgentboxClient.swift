@@ -47,6 +47,20 @@ final class AgentboxClient {
         return try JSONDecoder().decode(RemoteProject.self, from: data)
     }
 
+    /// Server-side project rename: the handler renames the workspace directory
+    /// on disk and updates the database row in one request.
+    func renameProject(_ project: RemoteProject, to newName: String, in workspace: Workspace) async throws -> RemoteProject {
+        let url = Self.endpoint(
+            server,
+            "api/sessions/\(escaped(workspace.id))/projects/\(escaped(project.id))"
+        )
+        var request = authorizedRequest(url: url, method: "PATCH")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["name": newName])
+        let data = try await Self.perform(request, token: token)
+        return try JSONDecoder().decode(RemoteProject.self, from: data)
+    }
+
     func upload(file: URL, workspace: Workspace, project: String) async throws -> String? {
         let boundary = "Agentbox-\(UUID().uuidString)"
         let multipart = try MultipartFile(file: file, boundary: boundary)

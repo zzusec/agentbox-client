@@ -5,6 +5,7 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     var onSelectProject: ((RemoteProject) -> Void)?
     var onChooseLocalRoot: (() -> Void)?
     var onCreateProject: (() -> Void)?
+    var onRenameProject: ((RemoteProject) -> Void)?
 
     private let workspacePicker = NSPopUpButton()
     private let projectTable = NSTableView()
@@ -16,6 +17,22 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     private let status = NSTextField(labelWithString: "正在连接…")
     private var workspaces: [Workspace] = []
     private var projects: [RemoteProject] = []
+    private let projectMenu = NSMenu()
+    private var menuProject: RemoteProject?
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        let renameItem = NSMenuItem(title: "重命名…", action: #selector(renameClicked), keyEquivalent: "")
+        renameItem.target = self
+        projectMenu.addItem(renameItem)
+        projectMenu.delegate = self
+        projectTable.menu = projectMenu
+    }
+
+    @objc private func renameClicked() {
+        guard let menuProject else { return }
+        onRenameProject?(menuProject)
+    }
 
     override func loadView() {
         let root = NSVisualEffectView()
@@ -358,5 +375,18 @@ private final class ProjectCellView: NSTableCellView {
     func configure(_ project: RemoteProject) {
         name.stringValue = project.name
         path.stringValue = project.path
+    }
+}
+
+extension SidebarViewController: NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        let row = projectTable.clickedRow
+        if row >= 0, row < projects.count {
+            menuProject = projects[row]
+            menu.items.first?.isEnabled = true
+        } else {
+            menuProject = nil
+            menu.items.first?.isEnabled = false
+        }
     }
 }

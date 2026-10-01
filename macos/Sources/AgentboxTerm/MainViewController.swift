@@ -63,6 +63,9 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         terminalGrid.onPaneClosed = { [weak self] terminal in
             self?.terminals.removeValue(forKey: terminal.paneKey)
         }
+        sidebar.onRenameProject = { [weak self] project in
+            self?.renameProject(project)
+        }
 
         Task { @MainActor in
             do {
@@ -203,6 +206,130 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
                 errorAlert.alertStyle = .warning
                 errorAlert.runModal()
             }
+        }
+    }
+
+    /// Right-click rename: stop the sync engine, move the local folder, rename
+    /// on the server (which renames the server-side directory), ask which side
+    /// wins for the next bootstrap, then restart syncing.
+    private func renameProject(_ project: RemoteProject) {
+        guard let workspace, workspace.id == self.workspace?.id else { return }
+        let alert = NSAlert()
+        alert.messageText = "重命名项目"
+        alert.informativeText = "服务器目录和本地文件夹会一起改名。"
+        alert.addButton(withTitle: "重命名")
+        alert.addButton(withTitle: "取消")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.stringValue = project.name
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let newName = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !newName.isEmpty, newName != project.name else { return }
+        guard !newName.contains("/"), !newName.hasPrefix(".") else {
+            sidebar.setStatus("项目名称无效")
+            return
+        }
+
+        Task { @MainActor in
+            var localRootURL: URL?
+            if let root = UserDefaults.standard.string(forKey: localRootKey(workspace)), !root.isEmpty {
+                localRootURL = URL(fileURLWithPath: root, isDirectory: true)
+            }
+            // Sync off while both sides move: a live engine would otherwise see
+            // the old project vanish and the new one appear mid-rename.
+            syncManager?.stop()
+            syncManager = nil
+            defer { sidebar.setStatus("双击项目进入 Claude") }
+
+            // Local folder first; roll it back if the server rejects the name.
+            var movedLocal = false
+            if let localRootURL {
+                let oldURL = localRootURL.appendingPathComponent(project.name)
+                let newURL = localRootURL.appendingPathComponent(newName)
+                var isDirectory: ObjCBool = false
+                if FileManager.default.fileExists(atPath: oldURL.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                    if FileManager.default.fileExists(atPath: newURL.path) {
+                        let conflict = NSAlert()
+                        conflict.messageText = "本地已存在同名文件夹"
+                        conflict.informativeText = newURL.path
+                        conflict.alertStyle = .warning
+                        conflict.runModal()
+                        startSyncIfConfigured(workspace, localRoot: localRootURL)
+                        return
+                    }
+                    do {
+                        try FileManager.default.moveItem(at: oldURL, to: newURL)
+                        movedLocal = true
+                    } catch {
+                        let failure = NSAlert()
+                        failure.messageText = "本地文件夹改名失败"
+                        failure.informativeText = error.localizedDescription
+                        failure.alertStyle = .warning
+                        failure.runModal()
+                        startSyncIfConfigured(workspace, localRoot: localRootURL)
+                        return
+                    }
+                }
+            }
+
+            do {
+                _ = try await client.renameProject(project, to: newName, in: workspace)
+            } catch {
+                if movedLocal, let localRootURL {
+                    let oldURL = localRootURL.appendingPathComponent(project.name)
+                    let newURL = localRootURL.appendingPathComponent(newName)
+                    try? FileManager.default.moveItem(at: newURL, to: oldURL)
+                }
+                let failure = NSAlert()
+                failure.messageText = "服务器改名失败"
+                failure.informativeText = error.localizedDescription
+                failure.alertStyle = .warning
+                failure.runModal()
+                startSyncIfConfigured(workspace, localRoot: localRootURL)
+                return
+            }
+
+            // The rename orphans any open terminal for the old name; dismiss it
+            // to the background so reopening uses the new name.
+            let oldKey = "\(workspace.id)/\(project.name)"
+            if let stale = terminals.removeValue(forKey: oldKey) {
+                terminalGrid.remove(stale)
+            }
+
+            if localRootURL != nil {
+                let policy = askRenamePolicy()
+                if let policy {
+                    UserDefaults.standard.set(policy, forKey: initialPolicyKey(workspace))
+                }
+                startSyncIfConfigured(workspace, localRoot: localRootURL)
+            }
+            do {
+                sidebar.setProjects(try await client.projects(in: workspace))
+            } catch {
+                sidebar.setStatus("读取项目失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func startSyncIfConfigured(_ workspace: Workspace, localRoot: URL?) {
+        guard let localRoot else { return }
+        startSync(workspace, localRoot: localRoot)
+    }
+
+    private func askRenamePolicy() -> String? {
+        let alert = NSAlert()
+        alert.messageText = "重命名完成：以哪边代码为准？"
+        alert.informativeText = "同步内容有分歧时，所选一侧将覆盖另一侧；内容一致则无事发生。"
+        alert.addButton(withTitle: "以服务器为准")
+        alert.addButton(withTitle: "以本地为准")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return "server"
+        case .alertSecondButtonReturn:
+            return "local"
+        default:
+            return nil
         }
     }
 
