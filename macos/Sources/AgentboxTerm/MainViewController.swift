@@ -218,6 +218,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         self.workspace = workspace
         syncManager?.stop()
         syncManager = nil
+        sidebar.setWorkspaceID(workspace.id)
         let root = UserDefaults.standard.string(forKey: localRootKey(workspace))
         sidebar.setLocalRoot(root)
         if let root {

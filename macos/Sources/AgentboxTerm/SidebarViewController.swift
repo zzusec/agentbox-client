@@ -28,6 +28,8 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     private let status = NSTextField(labelWithString: "正在连接…")
     private var workspaces: [Workspace] = []
     private var projects: [RemoteProject] = []
+    private var workspaceID: String?
+    private var localRootPath: String?
     private let projectMenu = NSMenu()
     private var menuProject: RemoteProject?
 
@@ -146,7 +148,6 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
             emptyState.trailingAnchor.constraint(lessThanOrEqualTo: projectArea.trailingAnchor, constant: -18),
         ])
 
-        let syncPanel = makeSyncPanel()
         status.font = .systemFont(ofSize: 11)
         status.textColor = NativeTheme.secondaryText
         status.lineBreakMode = .byTruncatingTail
@@ -158,7 +159,6 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
             workspacePicker,
             projectHeader,
             projectArea,
-            syncPanel,
             status,
         ])
         stack.orientation = .vertical
@@ -209,6 +209,23 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
         localRoot.stringValue = path ?? "尚未选择"
         localRoot.toolTip = path
         chooseRootButton.title = path == nil ? "选择目录" : "修改目录"
+        localRootPath = path
+    }
+
+    func setWorkspaceID(_ id: String?) {
+        workspaceID = id
+    }
+
+    /// Returns the local directory that a project would sync to.
+    private func localPath(for project: RemoteProject) -> String {
+        if let wid = workspaceID,
+           let dir = ProjectSyncStore.settings(for: wid)[project.id]?.localDir, !dir.isEmpty {
+            return dir
+        }
+        if let root = localRootPath, !root.isEmpty {
+            return (root as NSString).appendingPathComponent(project.name)
+        }
+        return project.path
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int {
@@ -228,7 +245,7 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
         let cell = tableView.makeView(withIdentifier: identifier, owner: nil) as? ProjectCellView
             ?? ProjectCellView()
         cell.identifier = identifier
-        cell.configure(projects[row])
+        cell.configure(projects[row], localPath: localPath(for: projects[row]))
         return cell
     }
 
@@ -415,9 +432,9 @@ private final class ProjectCellView: NSTableCellView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func configure(_ project: RemoteProject) {
+    func configure(_ project: RemoteProject, localPath: String) {
         name.stringValue = project.name
-        path.stringValue = project.path
+        path.stringValue = localPath
     }
 }
 
@@ -453,7 +470,6 @@ extension SidebarViewController: NSMenuDelegate {
         menu.addItem(item("复制路径", "doc.on.doc", #selector(copyPathClicked)))
         menu.addItem(.separator())
         menu.addItem(item("修改项目名称…", "pencil", #selector(renameClicked)))
-        menu.addItem(item("修改本地工作空间…", "folder", #selector(changeLocalDirClicked)))
         menu.addItem(policyItem(for: project))
         menu.addItem(item("打开同步日志", "doc.text.magnifyingglass", #selector(openSyncLogClicked)))
         menu.addItem(.separator())
