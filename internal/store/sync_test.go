@@ -13,7 +13,7 @@ func TestReconcileSyncProjectsKeepsStableIDs(t *testing.T) {
 	}
 	defer st.Close()
 
-	first, err := st.ReconcileSyncProjects("s1", []string{"alpha", "beta"})
+	first, err := st.ReconcileSyncProjects("s1", "/srv/instances/s1/workspace", []string{"alpha", "beta"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +25,7 @@ func TestReconcileSyncProjectsKeepsStableIDs(t *testing.T) {
 		ids[p.Name] = p.ID
 	}
 
-	second, err := st.ReconcileSyncProjects("s1", []string{"alpha", "gamma"})
+	second, err := st.ReconcileSyncProjects("s1", "/srv/instances/s1/workspace", []string{"alpha", "gamma"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestSyncLeaseRejectsOtherDeviceUntilExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	projects, err := st.ReconcileSyncProjects("s1", []string{"alpha"})
+	projects, err := st.ReconcileSyncProjects("s1", "/srv/instances/s1/workspace", []string{"alpha"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -67,7 +67,8 @@ type Account struct {
 type Proxy struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
-	Scheme   string `json:"scheme"` // socks5 | http | https
+	Kind     string `json:"kind,omitempty"` // residential | datacenter, "" = unlabelled
+	Scheme   string `json:"scheme"`         // socks5 | http | https
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
 	Username string `json:"username,omitempty"`
@@ -80,6 +81,24 @@ const (
 	ProxyHTTP   = "http"
 	ProxyHTTPS  = "https"
 )
+
+// Proxy kinds. A residential exit is what account providers expect; datacenter
+// exits are labelled separately so the UI can warn before an instance binds
+// one. An empty kind means the pool predates the field.
+const (
+	ProxyKindResidential = "residential"
+	ProxyKindDatacenter  = "datacenter"
+)
+
+// ValidProxyKind reports whether kind is an accepted proxy kind. An empty
+// string is accepted so existing configs keep loading.
+func ValidProxyKind(kind string) bool {
+	switch kind {
+	case "", ProxyKindResidential, ProxyKindDatacenter:
+		return true
+	}
+	return false
+}
 
 // Endpoint is the proxy's dial address.
 func (p Proxy) Endpoint() string { return net.JoinHostPort(p.Host, strconv.Itoa(p.Port)) }
@@ -154,6 +173,14 @@ const defaultTunnelBind = "172.17.0.1:1080"
 type ProxyBridgeConfig struct {
 	Bind string `json:"bind,omitempty"`
 	Host string `json:"host,omitempty"`
+	// RequireInstanceProxy makes an outbound proxy mandatory for every
+	// instance: an instance with no usable proxy fails to start instead of
+	// leaking the server's own egress IP. It is a pointer so that an explicit
+	// false survives a config round-trip (plain bool + omitempty would read
+	// back as true). Clear it to fall back to the pre-v11 behaviour — which is
+	// the escape hatch if a deployment has instances that deliberately run
+	// without a proxy.
+	RequireInstanceProxy *bool `json:"require_instance_proxy,omitempty"`
 }
 
 // defaultProxyBridgeBind sits on the same gateway as the tunnel proxy, one port
@@ -534,6 +561,9 @@ func (c *Config) validateLocked() error {
 		if !ValidProxyScheme(p.Scheme) {
 			return fmt.Errorf("proxy %q: scheme must be socks5, http or https", p.ID)
 		}
+		if !ValidProxyKind(p.Kind) {
+			return fmt.Errorf("proxy %q: kind must be residential or datacenter", p.ID)
+		}
 		if err := validProxyHost(p.Host); err != nil {
 			return fmt.Errorf("proxy %q: %w", p.ID, err)
 		}
@@ -837,6 +867,19 @@ func (c *Config) GetProxyBridge() ProxyBridgeConfig {
 		}
 	}
 	return pb
+}
+
+// RequireInstanceProxy reports whether an instance may run without a usable
+// outbound proxy. It defaults to true so a missing proxy fails closed; an
+// operator can set proxy_bridge.require_instance_proxy=false to restore the
+// pre-v11 "no proxy means direct egress" behaviour without a rollback.
+func (c *Config) RequireInstanceProxy() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.ProxyBridge.RequireInstanceProxy == nil {
+		return true
+	}
+	return *c.ProxyBridge.RequireInstanceProxy
 }
 
 func (c *Config) ProxyList() []Proxy {
@@ -1227,6 +1270,7 @@ func (c *Config) AddProxy(p Proxy) error {
 // ProxyPatch is a partial proxy update; nil fields stay unchanged.
 type ProxyPatch struct {
 	Name     *string
+	Kind     *string
 	Scheme   *string
 	Host     *string
 	Port     *int
@@ -1245,6 +1289,9 @@ func (c *Config) UpdateProxy(id string, p ProxyPatch) (Proxy, error) {
 			x := &w.Proxies[i]
 			if p.Name != nil {
 				x.Name = *p.Name
+			}
+			if p.Kind != nil {
+				x.Kind = *p.Kind
 			}
 			if p.Scheme != nil {
 				x.Scheme = *p.Scheme

@@ -38,7 +38,7 @@ args = ["tools.js"]
 			// Account config gets re-copied on restart; the workspace model must win
 			// every time without changing the shared account or other CLI settings.
 			for range 2 {
-				if err := SeedCredentials(agentType, home, pool, os.Getuid(), os.Getgid()); err != nil {
+				if err := SeedCredentials(home, []AccountSeed{{AgentType: agentType, CredDir: pool}}, os.Getuid(), os.Getgid()); err != nil {
 					t.Fatal(err)
 				}
 				if err := SeedDefaultModel(agentType, home, model, os.Getuid(), os.Getgid()); err != nil {

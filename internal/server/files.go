@@ -143,7 +143,9 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request, sess store
 	if mode == "file" {
 		rel := path.Join(filepath.ToSlash(destination), uploadedName)
 		out["path"] = rel
-		base := dockerx.WorkspaceMount
+		// The container mounts the workspace at the host's own absolute path,
+		// so the path shown here is valid on both sides.
+		base := s.containerWorkspace(r.Context(), sess)
 		if r.URL.Query().Get("scope") == "shared" {
 			base = "/shared"
 		}

@@ -6,15 +6,18 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -121,9 +124,22 @@ type Server struct {
 
 	mon *monState // 上一帧计数器快照，供监控页按轮询间隔算 CPU 速率
 
+	diskOnce sync.Once
+	disk     *diskUsageCache // 实例目录占用，靠后台遍历 + TTL 缓存
+
 	usageOnce sync.Once
 	usage     *usage.Service
 }
+
+// diskUsage returns the process-wide disk-usage cache, creating it on first use
+// so tests that build a Server literal still work.
+func (s *Server) diskUsage() *diskUsageCache {
+	s.diskOnce.Do(func() { s.disk = newDiskUsageCache() })
+	return s.disk
+}
+
+// instanceDiskKey is the cache key for one instance's disk footprint.
+func (s *Server) instanceDiskKey(sess store.Session) string { return s.sessionDir(sess) }
 
 func New(cfg *config.Config) (*Server, error) { return NewContext(context.Background(), cfg) }
 
@@ -175,6 +191,11 @@ func NewContext(ctx context.Context, cfg *config.Config) (*Server, error) {
 	s.chat = newChatManager(s)
 	s.git = gitx.New(dock, s.prepareGitSession)
 	if err := s.seedUsers(); err != nil {
+		dock.Close()
+		st.Close()
+		return nil, err
+	}
+	if err := s.migrateInstances(); err != nil {
 		dock.Close()
 		st.Close()
 		return nil, err
@@ -315,6 +336,28 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/sessions/{id}/projects", s.auth(s.withSession(s.handleProjectCreate)))
 	mux.Handle("PATCH /api/sessions/{id}/projects/{project}", s.auth(s.withSession(s.handleProjectRename)))
 	mux.Handle("DELETE /api/sessions/{id}/projects/{project}", s.auth(s.withSession(s.handleProjectDelete)))
+	// Instance stats: the owning user sees their own instances' resource use.
+	// It is deliberately not part of /api/monitor, which stays admin-only and
+	// reports every user's containers.
+	mux.Handle("GET /api/sessions/{id}/stats", s.auth(s.withSession(s.handleInstanceStats)))
+	mux.Handle("GET /api/instances/stats", s.auth(http.HandlerFunc(s.handleInstanceStatsList)))
+	mux.Handle("GET /api/instances/proxies", s.auth(http.HandlerFunc(s.handleInstanceProxyOptions)))
+	mux.Handle("GET /api/instances/{id}/stats", s.auth(s.withSession(s.handleInstanceStats)))
+	// /api/instances is an alias for /api/sessions. "Instance" is the name the
+	// product uses now, but the routes predate it and the macOS client,
+	// abox-sync and existing bookmarks all speak /api/sessions, so both
+	// spellings resolve to the same handlers.
+	mux.Handle("GET /api/instances", s.auth(http.HandlerFunc(s.handleListSessions)))
+	mux.Handle("POST /api/instances", s.auth(http.HandlerFunc(s.handleCreateSession)))
+	mux.Handle("GET /api/instances/{id}", s.auth(s.withSession(s.handleGetSession)))
+	mux.Handle("POST /api/instances/{id}/start", s.auth(s.withSession(s.handleStartSession)))
+	mux.Handle("POST /api/instances/{id}/stop", s.auth(s.withSession(s.handleStopSession)))
+	mux.Handle("PATCH /api/instances/{id}", s.auth(s.withSession(s.handleRenameSession)))
+	mux.Handle("DELETE /api/instances/{id}", s.auth(s.withSession(s.handleDeleteSession)))
+	mux.Handle("GET /api/instances/{id}/projects", s.auth(s.withSession(s.handleProjectList)))
+	mux.Handle("POST /api/instances/{id}/projects", s.auth(s.withSession(s.handleProjectCreate)))
+	mux.Handle("PATCH /api/instances/{id}/projects/{project}", s.auth(s.withSession(s.handleProjectRename)))
+	mux.Handle("DELETE /api/instances/{id}/projects/{project}", s.auth(s.withSession(s.handleProjectDelete)))
 	mux.Handle("GET /api/sync/projects/{project}/manifest", s.auth(http.HandlerFunc(s.handleSyncManifest)))
 	mux.Handle("POST /api/sync/projects/{project}/lease", s.auth(http.HandlerFunc(s.handleSyncLease)))
 	mux.Handle("DELETE /api/sync/projects/{project}/lease", s.auth(http.HandlerFunc(s.handleSyncLease)))
@@ -639,39 +682,119 @@ func (s *Server) accountView(a config.Account, sessions int) acctView {
 	return v
 }
 
-// execEnv is the full per-exec env for a session: account env, the account's
-// outbound IP proxy when one is bound, plus the intranet proxy variable when
-// the owning user has a live reverse tunnel.
+// execEnv is the full per-exec env for a session using its default tool.
 func (s *Server) execEnv(sess store.Session) ([]string, error) {
-	acct, err := s.sessionAccount(sess)
+	return s.execEnvFor(sess, sess.Agent, "")
+}
+
+// execEnvFor builds the per-exec env for one tool inside an instance.
+//
+// tool selects which bound account supplies the credentials: an instance can
+// carry both a claude and a codex account, and a project may pin either, so the
+// env has to follow the tool rather than the instance default. An empty tool
+// falls back to the instance default.
+func (s *Server) execEnvFor(sess store.Session, tool, project string) ([]string, error) {
+	if tool == "" {
+		tool = sess.Agent
+	}
+	// A project may override the tool; it is validated on write, so an unknown
+	// value here means the row predates validation and the default is safer.
+	if project != "" {
+		if p, err := s.projectByName(sess, project); err == nil && p.Agent != "" {
+			tool = p.Agent
+		}
+	}
+	acct, err := s.accountFor(sess, tool)
 	if err != nil {
 		return nil, err
 	}
 	env := make([]string, 0, len(acct.Env))
 	for k, v := range acct.Env {
+		if sess.ProxyID != "" && slices.Contains(proxyEnvNames, k) {
+			continue
+		}
 		env = append(env, k+"="+v)
 	}
 	sort.Strings(env)
-	env = append(env, s.proxyEnvList(sess)...)
-	if sess.Agent == config.AgentClaude && sess.DefaultModel != "" {
-		// The workspace default takes precedence over an account model override.
-		filtered := env[:0]
-		for _, kv := range env {
-			if !strings.HasPrefix(kv, "ANTHROPIC_MODEL=") {
-				filtered = append(filtered, kv)
+	proxyEnv, err := s.proxyEnvList(sess)
+	if err != nil {
+		return nil, err
+	}
+	env = append(env, proxyEnv...)
+	if tool == config.AgentClaude {
+		if model := sess.ModelFor(tool); model != "" {
+			// The instance default takes precedence over an account override.
+			filtered := env[:0]
+			for _, kv := range env {
+				if !strings.HasPrefix(kv, "ANTHROPIC_MODEL=") {
+					filtered = append(filtered, kv)
+				}
 			}
+			env = append(filtered, "ANTHROPIC_MODEL="+model)
 		}
-		env = append(filtered, "ANTHROPIC_MODEL="+sess.DefaultModel)
 	}
 	return append(env, s.tunnelEnvList(sess)...), nil
 }
 
-// accountSessionCounts counts sessions per account across all users (guards
-// account deletion and feeds the 设置页 display).
+// accountFor resolves the account bound to a tool, enforcing access.
+func (s *Server) accountFor(sess store.Session, tool string) (config.Account, error) {
+	id := sess.AccountForTool(tool)
+	if id == "" {
+		return config.Account{}, fmt.Errorf("实例未绑定 %s 账号", tool)
+	}
+	acct, ok := s.cfg.Account(id)
+	if !ok {
+		return config.Account{}, errAccountGone
+	}
+	if acct.Type != tool {
+		return config.Account{}, fmt.Errorf("实例绑定的 %s 账号类型不匹配", tool)
+	}
+	if !s.canUseAccount(acct, sess.User) {
+		return config.Account{}, errAccountAccess
+	}
+	return acct, nil
+}
+
+// projectByName looks up one of an instance's projects by directory name.
+func (s *Server) projectByName(sess store.Session, name string) (store.SyncProject, error) {
+	projects, err := s.store.SyncProjects(sess.ID)
+	if err != nil {
+		return store.SyncProject{}, err
+	}
+	for _, p := range projects {
+		if p.Name == name {
+			return p, nil
+		}
+	}
+	return store.SyncProject{}, sql.ErrNoRows
+}
+
+// instanceAccountRefs lists every account one instance is bound to, without
+// duplicates. An instance may carry a claude and a codex account at once, and
+// the legacy column still counts for rows that have not been split yet.
+func instanceAccountRefs(sess store.Session) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, id := range []string{sess.ClaudeAccountID, sess.CodexAccountID, sess.AccountID} {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// accountSessionCounts counts instances per account across all users (guards
+// account deletion and feeds the 设置页 display). It counts instances rather
+// than the legacy single column: an instance bound to two accounts has to
+// block deletion of both.
 func (s *Server) accountSessionCounts() map[string]int {
 	counts := map[string]int{}
 	for _, sess := range s.store.All() {
-		counts[sess.AccountID]++
+		for _, id := range instanceAccountRefs(sess) {
+			counts[id]++
+		}
 	}
 	return counts
 }
@@ -683,7 +806,9 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		counts = s.accountSessionCounts()
 	} else {
 		for _, sess := range s.store.List(reqUser(r).Name) {
-			counts[sess.AccountID]++
+			for _, id := range instanceAccountRefs(sess) {
+				counts[id]++
+			}
 		}
 	}
 	out := []acctView{}
@@ -707,7 +832,7 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) workspaces() *workspace.Service {
 	s.workspaceOnce.Do(func() {
-		s.workspace = workspace.New(s.cfg, s.store, s.dock, s.sessionAccount, s.credentialService().Sync)
+		s.workspace = workspace.New(s.cfg, s.store, s.dock, s.sessionAccounts, s.credentialService().Sync)
 		s.workspace.SetNetworkHook(s.ensureNetwork)
 		s.workspace.SetMCPHook(s.syncMCPOnStart)
 	})

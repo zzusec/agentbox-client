@@ -9,7 +9,7 @@ import (
 
 // SchemaVersion changes only with a committed, ordered migration. Versions
 // predating this framework use user_version=0, including partially upgraded DBs.
-const SchemaVersion = 10
+const SchemaVersion = 11
 
 //go:embed migrations/001_baseline.sql
 var baselineSQL string
@@ -70,7 +70,43 @@ func migrations() []migration {
 		}},
 		{9, func(tx *sql.Tx) error { _, err := tx.Exec(usageMessagesSQL); return err }},
 		{10, func(tx *sql.Tx) error { _, err := tx.Exec(syncSQL); return err }},
+		{11, instanceMigrationV11},
 	}
+}
+
+// instanceMigrationV11 turns a workspace into a multi-tool instance: it can
+// hold a claude account and a codex account at the same time, it owns its
+// outbound proxy instead of inheriting one from the account, and its projects
+// record both the tool they are developed with and the absolute path they live
+// at (which is the same path inside the container).
+//
+// Every column is additive with a benign default, so the rollback path is
+// "restore the backup" rather than "undo a destructive rewrite". Rows are
+// backfilled at the server layer, which is the only place with access to both
+// the config (account types, proxies) and the data directory.
+func instanceMigrationV11(tx *sql.Tx) error {
+	for _, c := range []struct{ table, name, definition string }{
+		{"sessions", "claude_account_id", "TEXT NOT NULL DEFAULT ''"},
+		{"sessions", "codex_account_id", "TEXT NOT NULL DEFAULT ''"},
+		{"sessions", "proxy_id", "TEXT NOT NULL DEFAULT ''"},
+		{"sessions", "default_model_claude", "TEXT NOT NULL DEFAULT ''"},
+		{"sessions", "default_model_codex", "TEXT NOT NULL DEFAULT ''"},
+		{"sync_projects", "agent", "TEXT NOT NULL DEFAULT ''"},
+		{"sync_projects", "path", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		var found int
+		if err := tx.QueryRow("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?", c.table, c.name).Scan(&found); err != nil {
+			return err
+		}
+		if found == 0 {
+			if _, err := tx.Exec("ALTER TABLE " + c.table + " ADD COLUMN " + c.name + " " + c.definition); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_sessions_proxy ON sessions(proxy_id);
+CREATE INDEX IF NOT EXISTS idx_sync_projects_agent ON sync_projects(agent);`)
+	return err
 }
 func migrate(db *sql.DB) error { return runMigrations(db, migrations()) }
 func runMigrations(db *sql.DB, steps []migration) error {

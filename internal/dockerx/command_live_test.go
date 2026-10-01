@@ -73,7 +73,7 @@ chmod +x .git/hooks/pre-commit
 		{"add", "-A"},
 		{"-c", "user.name=test", "-c", "user.email=test@localhost", "commit", "-m", "first"},
 	} {
-		if _, err := runner.Run(ctx, "fixture", "project", args...); err != nil {
+		if _, err := runner.Run(ctx, "fixture", "/workspace", "project", args...); err != nil {
 			t.Fatalf("git %v: %v", args, err)
 		}
 	}
@@ -88,7 +88,7 @@ chmod +x .git/hooks/pre-commit
 	if _, err := m.ExecCommand(ctx, created.ID, []string{"/bin/sh", "-c", "printf 'changed\\n' >> /workspace/project/file.txt"}); err != nil {
 		t.Fatal(err)
 	}
-	diff, err := runner.Run(ctx, "fixture", "project", "diff", "--no-ext-diff", "--no-textconv", "HEAD", "--", "file.txt")
+	diff, err := runner.Run(ctx, "fixture", "/workspace", "project", "diff", "--no-ext-diff", "--no-textconv", "HEAD", "--", "file.txt")
 	if err != nil || !strings.Contains(diff, "+changed") {
 		t.Fatalf("diff=%q err=%v", diff, err)
 	}

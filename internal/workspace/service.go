@@ -14,7 +14,12 @@ import (
 	"time"
 )
 
-var ErrSessionGone = errors.New("session no longer exists")
+var (
+	ErrSessionGone = errors.New("session no longer exists")
+	// errAccountGone means the instance's accounts have all disappeared from
+	// config. Nothing can be seeded, so the instance must not come up.
+	errAccountGone = errors.New("account referenced by session is gone from config")
+)
 
 type Store interface {
 	Get(string) (store.Session, bool)
@@ -32,6 +37,13 @@ type Runtime interface {
 	Remove(context.Context, string) error
 }
 
+// AccountBinding is one account bound to an instance, tagged with the tool it
+// serves. An instance may hold a claude and a codex binding at once.
+type AccountBinding struct {
+	Agent   string // config.AgentClaude | config.AgentCodex
+	Account config.Account
+}
+
 // Service owns workspace lifecycle, activity and per-session serialization.
 // Account resolution/synchronization are injected until credentials extraction.
 type Service struct {
@@ -40,7 +52,7 @@ type Service struct {
 	cfg             *config.Config
 	store           Store
 	dock            Runtime
-	account         func(store.Session) (config.Account, error)
+	accounts        func(store.Session) ([]AccountBinding, error)
 	syncCredentials func(context.Context, config.Account, store.Session) error
 	activity        *Activity
 	mu              sync.Mutex
@@ -48,8 +60,8 @@ type Service struct {
 	locks           map[string]sessionLock
 }
 
-func New(cfg *config.Config, st Store, dock Runtime, account func(store.Session) (config.Account, error), syncCredentials func(context.Context, config.Account, store.Session) error) *Service {
-	return &Service{cfg: cfg, store: st, dock: dock, account: account, syncCredentials: syncCredentials, activity: NewActivity(), starts: make(sessionLock, 1), locks: map[string]sessionLock{}}
+func New(cfg *config.Config, st Store, dock Runtime, accounts func(store.Session) ([]AccountBinding, error), syncCredentials func(context.Context, config.Account, store.Session) error) *Service {
+	return &Service{cfg: cfg, store: st, dock: dock, accounts: accounts, syncCredentials: syncCredentials, activity: NewActivity(), starts: make(sessionLock, 1), locks: map[string]sessionLock{}}
 }
 func (s *Service) Activity() *Activity { return s.activity }
 
@@ -136,18 +148,25 @@ func (s *Service) Start(ctx context.Context, id string) (store.Session, error) {
 	if !ok {
 		return store.Session{}, ErrSessionGone
 	}
-	acct, err := s.account(cur)
+	bindings, err := s.accounts(cur)
 	if err != nil {
 		return store.Session{}, err
 	}
+	if len(bindings) == 0 {
+		return store.Session{}, errors.New("实例未绑定任何账号")
+	}
 	// 每次拉起（含每轮对话、终端连接）前先与账号池对齐 OAuth 令牌链，
 	// 会话里刷新出的新令牌得以写回，池子的新令牌也播发进会话。
-	if acct.CredentialsDir != "" {
-		if err := s.syncCredentials(ctx, acct, cur); err != nil {
+	for _, b := range bindings {
+		if b.Account.CredentialsDir == "" {
+			continue
+		}
+		if err := s.syncCredentials(ctx, b.Account, cur); err != nil {
 			return store.Session{}, err
 		}
 	}
-	if cur.Status == store.StatusRunning && s.dock.RunningWithMount(ctx, cur.ContainerID, dockerx.SharedMount) {
+	if cur.Status == store.StatusRunning && s.dock.RunningWithMount(ctx, cur.ContainerID, dockerx.SharedMount) &&
+		(s.dock.RunningWithMount(ctx, cur.ContainerID, dockerx.WorkspaceMount) || s.dock.RunningWithMount(ctx, cur.ContainerID, s.WorkspaceDir(cur))) {
 		if s.network != nil {
 			if err := s.network(ctx, cur); err != nil {
 				return store.Session{}, err
@@ -177,25 +196,35 @@ func (s *Service) Start(ctx context.Context, id string) (store.Session, error) {
 		s.HomeTemplateDir(), s.UserTemplateDir(cur.User)); err != nil {
 		log.Printf("seed home template %s: %v", cur.ID, err)
 	}
-	if err := agent.SeedCredentials(cur.Agent, s.HomeDir(cur), acct.CredentialsDir, dockerx.AgentUID, dockerx.AgentGID); err != nil {
+	// Seed every bound tool. .claude and .codex sit side by side in the home,
+	// so one container can serve both and each project picks one at runtime.
+	seeds := make([]agent.AccountSeed, 0, len(bindings))
+	for _, b := range bindings {
+		seeds = append(seeds, agent.AccountSeed{AgentType: b.Agent, CredDir: b.Account.CredentialsDir})
+	}
+	if err := agent.SeedCredentialsIn(s.HomeDir(cur), seeds, s.WorkspaceDir(cur), dockerx.AgentUID, dockerx.AgentGID); err != nil {
 		return store.Session{}, err
 	}
-	if err := agent.SeedDefaultModel(cur.Agent, s.HomeDir(cur), cur.DefaultModel, dockerx.AgentUID, dockerx.AgentGID); err != nil {
-		return store.Session{}, err
+	for _, b := range bindings {
+		if err := agent.SeedDefaultModel(b.Agent, s.HomeDir(cur), cur.ModelFor(b.Agent), dockerx.AgentUID, dockerx.AgentGID); err != nil {
+			return store.Session{}, err
+		}
 	}
 	// Only advertise the intranet proxy to the agent when the feature is on;
 	// the hint keys off $AGENTBOX_INTRANET_PROXY so it stays inert if no tunnel
 	// is live, but there's no reason to seed it when tunneling is disabled.
 	if s.cfg.GetTunnel().Enabled {
-		if err := agent.SeedIntranetHint(cur.Agent, s.HomeDir(cur), dockerx.AgentUID, dockerx.AgentGID); err != nil {
-			log.Printf("seed intranet hint %s: %v", cur.ID, err)
+		for _, b := range bindings {
+			if err := agent.SeedIntranetHint(b.Agent, s.HomeDir(cur), dockerx.AgentUID, dockerx.AgentGID); err != nil {
+				log.Printf("seed intranet hint %s: %v", cur.ID, err)
+			}
 		}
 	}
 	shared, err := s.EnsureSharedDir(cur.User)
 	if err != nil {
 		return store.Session{}, err
 	}
-	cid, err := s.dock.EnsureRunning(ctx, cur, acct, s.WorkspaceDir(cur), s.HomeDir(cur), shared)
+	cid, err := s.dock.EnsureRunning(ctx, cur, bindings[0].Account, s.WorkspaceDir(cur), s.HomeDir(cur), shared)
 	if err != nil {
 		return store.Session{}, err
 	}
@@ -365,8 +394,10 @@ func (s *Service) UseRunning(ctx context.Context, id string, fn func(store.Sessi
 	if !ok {
 		return ErrSessionGone
 	}
-	if _, err := s.account(sess); err != nil {
+	if bindings, err := s.accounts(sess); err != nil {
 		return err
+	} else if len(bindings) == 0 {
+		return errAccountGone
 	}
 	running, err := s.dock.Running(ctx, sess.ContainerID)
 	if err != nil {

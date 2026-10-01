@@ -24,7 +24,10 @@ func (s *Service) syncRotatingCred(acct config.Account, sess store.Session) {
 		return
 	}
 	acct = current
-	poolName, homeRel := agent.RotatingCredFile(sess.Agent)
+	// Key off the account's own type, not the instance default: an instance can
+	// carry both a claude and a codex account, and each has its own rotating
+	// credential file to converge.
+	poolName, homeRel := agent.RotatingCredFile(acct.Type)
 	pool, err := safefs.Open(acct.CredentialsDir)
 	if err != nil {
 		return

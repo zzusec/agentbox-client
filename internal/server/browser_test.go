@@ -53,11 +53,14 @@ func TestBrowserAccessBeforeDocker(t *testing.T) {
 func TestBrowserNetworkFailsClosedAndRedacts(t *testing.T) {
 	s, sess := accessTestServer(t)
 	sess.AccountID = "shared"
+	require := false
+	s.cfg.ProxyBridge.RequireInstanceProxy = &require
 	env, oldKey, err := s.browserEnv(sess)
 	if err != nil || len(env) != 1 {
 		t.Fatalf("direct: %v %v", env, err)
 	}
 	s.cfg.Accounts = []config.Account{{ID: "shared", Type: "claude", ProxyID: "missing"}}
+	sess.ProxyID = "missing"
 	if _, _, err = s.browserEnv(sess); err == nil {
 		t.Fatal("dangling proxy fell back to direct")
 	}

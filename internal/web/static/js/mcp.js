@@ -1,6 +1,7 @@
 import { actionButton } from "./icons.js";
 import { hideTip } from "./tip.js";
 import { api } from "./api.js";
+import { instanceTools } from "./data.js";
 import { S, bus } from "./state.js";
 import { $, askConfirm, toast } from "./util.js";
 import { setSelectValue } from "./select.js";
@@ -91,7 +92,7 @@ export function initMCP() {
         return result;
     }
     async function load() {
-        if (S.tab !== "mcp" || S.current?.agent !== "claude")
+        if (S.tab !== "mcp" || !S.current || !instanceTools(S.current).includes("claude"))
             return;
         const g = ++generation;
         loaded = key();

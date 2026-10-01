@@ -36,7 +36,7 @@ func (s *Server) discoverReasoning(ctx context.Context, sess store.Session, acct
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	stream, err := s.dock.ExecStream(ctx, sess.ContainerID, []string{"codex", "app-server"}, env)
+	stream, err := s.dock.ExecStream(ctx, sess.ContainerID, []string{"codex", "app-server"}, env, "")
 	if err != nil {
 		return nil, "unavailable"
 	}

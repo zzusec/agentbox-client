@@ -22,13 +22,16 @@
   --scroll-thumb-hover: #6b8199;
   --scroll-thumb-active: var(--amber);
 
-  /* ---- 青绿强调：墨（文字/描边）与填充（实心块）分开，
-   * 浅色主题下墨要压深才有对比度，填充仍需保持亮以承载深色文字 ---- */
-  --amber: #2dd4bf;
-  --amber-dim: #1f6f68;  /* 强调弱描边 */
-  --accent: #14b8a6;     /* 主按钮 / 发送钮 / 字标光标块的底色 */
-  --accent-hi: #2dd4bf;
-  --on-accent: #042f2e;  /* 压在 --accent 上的文字 */
+  /* ---- 蓝色强调：墨（文字/描边）与填充（实心块）分开，
+   * 浅色主题下墨要压深才有对比度，填充仍需保持亮以承载深色文字 ----
+   * 这一组曾写在 console.css 里并由其覆盖；console.css 在 index.html 中最后
+   * 加载，于是"同一令牌两处真值" —— 改一处不生效，改另一处又只影响部分组件。
+   * 令牌一律只在这里定义，其它 css 只允许 var() 引用。 */
+  --amber: #8ab4ff;
+  --amber-dim: #284778;  /* 强调弱描边 */
+  --accent: #2563eb;     /* 主按钮 / 发送钮 / 字标光标块的底色 */
+  --accent-hi: #1d4ed8;
+  --on-accent: #fff;     /* 压在 --accent 上的文字 */
   --violet: #a78bfa;     /* 次级状态 / 角色标签 */
   --violet-soft: #241f45;
 
@@ -70,28 +73,28 @@
   --claude: #d97757; /* Claude 官方陶土橙（simple-icons 品牌色） */
   --openai: #10a37f; /* ChatGPT 官方青绿 */
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", monospace;
-  --sans: -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 
   color-scheme: dark; /* 让原生滚动条 / 表单控件跟着主题走 */
 }
 
 /* 浅色主题：白卡片 + 冷蓝灰工作台底，接近数据运营台而不是纸张。 */
 :root[data-theme="light"] {
-  --bg: #f5f8fc;
-  --panel: #ffffff;
-  --panel-2: #f0f4f8;
-  --line: #dbe3ee;
-  --line-soft: #e9eff6;
-  --text: #1f2937;
+  --bg: #f8fafc;
+  --panel: #fff;
+  --panel-2: #f1f5f9;
+  --line: #e2e8f0;
+  --line-soft: #edf1f6;
+  --text: #172033;
   --text-hi: #0f172a;
-  --muted: #66758a;
+  --muted: #64748b;
   --scroll-thumb: #c5d0de;
   --scroll-thumb-hover: #9dadc0;
 
-  --amber: #0f766e;   /* 压深后在白底上可承载正文与图标 */
-  --amber-dim: #99d9d1;
-  --accent: #0f766e;
-  --accent-hi: #115e59;
+  --amber: #2563eb;
+  --amber-dim: #bfdbfe;
+  --accent: #2563eb;
+  --accent-hi: #1d4ed8;
   --on-accent: #ffffff;
   --violet: #6d3fd1;
   --violet-soft: #f1ecff;
@@ -112,8 +115,8 @@
   --scrim: rgba(15, 23, 42, 0.24);
   --backdrop: rgba(15, 23, 42, 0.28);
   --backdrop-strong: rgba(15, 23, 42, 0.68);
-  --shadow-sm: 0 4px 14px rgba(15, 23, 42, 0.07);
-  --shadow-md: 0 10px 28px rgba(15, 23, 42, 0.1);
+  --shadow-sm: 0 1px 3px rgb(15 23 42 / 5%);
+  --shadow-md: 0 8px 24px rgb(15 23 42 / 8%);
   --shadow-lg: 0 18px 44px rgba(15, 23, 42, 0.14);
   --checker-a: #edf2f7;
   --checker-b: #ffffff;

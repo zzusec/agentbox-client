@@ -662,6 +662,9 @@ func (s *Service) external(user, session string) []External {
 		return out
 	}
 	base := filepath.Join(filepath.Dir(p), "home")
+	// The workspace is mounted into the container at both /workspace and its
+	// host path; claude may have recorded MCP servers under either.
+	workspacePath := filepath.Join(s.data, "users", user, "sessions", session, "workspace")
 	raw, err := root.ReadAll(filepath.Join(base, ".claude.json"), 4<<20)
 	if err == nil {
 		var state struct {
@@ -670,9 +673,24 @@ func (s *Service) external(user, session string) []External {
 			} `json:"projects"`
 		}
 		if json.Unmarshal(raw, &state) == nil {
-			for name := range state.Projects["/workspace"].MCP {
-				if ValidName(name) {
-					out = append(out, External{Name: name, Source: "local"})
+			// Claude keys MCP servers per project directory. Both /workspace
+			// and the host-absolute workspace path are trusted (see
+			// agent.SeedCredentials), so read whichever entry exists.
+			for _, key := range []string{"/workspace", workspacePath} {
+				for name := range state.Projects[key].MCP {
+					if !ValidName(name) {
+						continue
+					}
+					dup := false
+					for _, have := range out {
+						if have.Name == name {
+							dup = true
+							break
+						}
+					}
+					if !dup {
+						out = append(out, External{Name: name, Source: "local"})
+					}
 				}
 			}
 		}

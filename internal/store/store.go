@@ -43,12 +43,27 @@ type Session struct {
 	ID        string `json:"id"`
 	User      string `json:"user"`
 	Name      string `json:"name"`
-	Agent     string `json:"agent"` // "claude" | "codex"
+	Agent     string `json:"agent"` // "claude" | "codex" — the instance default tool
 	AccountID string `json:"account_id"`
+	// ClaudeAccountID and CodexAccountID bind one account per tool. Both may be
+	// set, which is what lets a single instance run either CLI. AccountID stays
+	// as the pre-v11 single-account column: it is the migration source and the
+	// fallback while a row has not been backfilled yet.
+	ClaudeAccountID string `json:"claude_account_id"`
+	CodexAccountID  string `json:"codex_account_id"`
+	// ProxyID is the instance's mandatory outbound proxy. It replaced the
+	// account-level binding: egress is a property of the container, not of the
+	// credentials inside it.
+	ProxyID string `json:"proxy_id"`
 	// DefaultModel snapshots the system default when this workspace is created.
 	DefaultModel string `json:"default_model"`
-	ContainerID  string `json:"container_id,omitempty"`
-	Status       string `json:"status"`
+	// DefaultModelClaude / DefaultModelCodex carry a per-tool default. A single
+	// column cannot serve both: claude and codex model ids are disjoint, and an
+	// instance bound to both accounts needs a usable default for each.
+	DefaultModelClaude string `json:"default_model_claude"`
+	DefaultModelCodex  string `json:"default_model_codex"`
+	ContainerID        string `json:"container_id,omitempty"`
+	Status             string `json:"status"`
 	// ChatSession is the provider-side conversation id of the latest headless
 	// turn; each new turn resumes from it so the conversation survives
 	// container restarts.
@@ -140,13 +155,74 @@ func NewID() string {
 	return hex.EncodeToString(b)
 }
 
-const sessionCols = "id, user, name, agent, account_id, container_id, status, chat_session, stop_reason, default_model, created_at, updated_at"
+// HasTool reports whether the instance can run the given agent: either it has
+// an account bound for that tool, or it predates the per-tool split and its
+// single account and default tool agree on it.
+//
+// AccountID and Agent are not cleared by the v11 backfill, so this stays the
+// source of truth for rows that were never migrated and for the window where a
+// row has an account but no per-tool column yet.
+func (s Session) HasTool(tool string) bool {
+	switch tool {
+	case "claude":
+		return s.ClaudeAccountID != "" || (s.AccountID != "" && s.Agent == "claude")
+	case "codex":
+		return s.CodexAccountID != "" || (s.AccountID != "" && s.Agent == "codex")
+	}
+	return false
+}
+
+// ModelFor returns the default model seeded for the given tool. The per-tool
+// columns win; the legacy single column is the fallback for rows that have not
+// been split yet or that only ever had one tool.
+func (s Session) ModelFor(tool string) string {
+	switch tool {
+	case "claude":
+		if s.DefaultModelClaude != "" {
+			return s.DefaultModelClaude
+		}
+	case "codex":
+		if s.DefaultModelCodex != "" {
+			return s.DefaultModelCodex
+		}
+	}
+	if tool == s.Agent {
+		return s.DefaultModel
+	}
+	return ""
+}
+
+// AccountForTool returns the account bound to the given tool, falling back to
+// the legacy single account while a row has not been split yet. Empty when the
+// instance cannot run that tool.
+func (s Session) AccountForTool(tool string) string {
+	switch tool {
+	case "claude":
+		if s.ClaudeAccountID != "" {
+			return s.ClaudeAccountID
+		}
+	case "codex":
+		if s.CodexAccountID != "" {
+			return s.CodexAccountID
+		}
+	}
+	if !s.HasTool(tool) {
+		return ""
+	}
+	return s.AccountID
+}
+
+const sessionCols = `id, user, name, agent, account_id, container_id, status, chat_session, stop_reason,
+	default_model, claude_account_id, codex_account_id, proxy_id, default_model_claude, default_model_codex,
+	created_at, updated_at`
 
 func scanSession(row interface{ Scan(...any) error }) (Session, error) {
 	var sess Session
 	var created, updated string
 	if err := row.Scan(&sess.ID, &sess.User, &sess.Name, &sess.Agent, &sess.AccountID,
-		&sess.ContainerID, &sess.Status, &sess.ChatSession, &sess.StopReason, &sess.DefaultModel, &created, &updated); err != nil {
+		&sess.ContainerID, &sess.Status, &sess.ChatSession, &sess.StopReason, &sess.DefaultModel,
+		&sess.ClaudeAccountID, &sess.CodexAccountID, &sess.ProxyID,
+		&sess.DefaultModelClaude, &sess.DefaultModelCodex, &created, &updated); err != nil {
 		return Session{}, err
 	}
 	var err error
@@ -192,16 +268,24 @@ func (s *Store) put(exec interface {
 	Exec(string, ...any) (sql.Result, error)
 }, sess Session) error {
 	_, err := exec.Exec(`INSERT INTO sessions
-		(id, user, name, agent, account_id, container_id, status, chat_session, stop_reason, default_model, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(id, user, name, agent, account_id, container_id, status, chat_session, stop_reason, default_model,
+		 claude_account_id, codex_account_id, proxy_id, default_model_claude, default_model_codex, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			user=excluded.user, name=excluded.name, agent=excluded.agent,
 			account_id=excluded.account_id, container_id=excluded.container_id,
 			status=excluded.status, chat_session=excluded.chat_session,
 			stop_reason=excluded.stop_reason, default_model=excluded.default_model,
+			claude_account_id=excluded.claude_account_id,
+			codex_account_id=excluded.codex_account_id,
+			proxy_id=excluded.proxy_id,
+			default_model_claude=excluded.default_model_claude,
+			default_model_codex=excluded.default_model_codex,
 			created_at=excluded.created_at, updated_at=excluded.updated_at`,
 		sess.ID, sess.User, sess.Name, sess.Agent, sess.AccountID, sess.ContainerID,
 		sess.Status, sess.ChatSession, sess.StopReason, sess.DefaultModel,
+		sess.ClaudeAccountID, sess.CodexAccountID, sess.ProxyID,
+		sess.DefaultModelClaude, sess.DefaultModelCodex,
 		sess.CreatedAt.Format(time.RFC3339Nano), sess.UpdatedAt.Format(time.RFC3339Nano))
 	return err
 }
@@ -242,7 +326,17 @@ func (s *Store) Delete(id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, query := range []string{"DELETE FROM git_bindings WHERE session_id=?", "DELETE FROM git_defaults WHERE session_id=?", "DELETE FROM sessions WHERE id=?"} {
+	// usage_events is deliberately absent: it is the money trail and its ids
+	// must never be reused (see UpsertTerminalUsage), so deleting an instance
+	// leaves its spend history intact.
+	for _, query := range []string{
+		"DELETE FROM git_bindings WHERE session_id=?",
+		"DELETE FROM git_defaults WHERE session_id=?",
+		"DELETE FROM sync_leases WHERE project_id IN (SELECT id FROM sync_projects WHERE session_id=?)",
+		"DELETE FROM sync_projects WHERE session_id=?",
+		"DELETE FROM usage_messages WHERE session_id=?",
+		"DELETE FROM sessions WHERE id=?",
+	} {
 		if _, err := tx.Exec(query, id); err != nil {
 			return err
 		}

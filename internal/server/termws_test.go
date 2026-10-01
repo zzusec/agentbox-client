@@ -184,9 +184,10 @@ func TestParseTerminalRequest(t *testing.T) {
 }
 
 func TestAgentTermCommandUsesProjectSession(t *testing.T) {
-	cmd := agentTermCommand([]string{envIntranetProxy + "=socks5h://x"}, "alpha", config.AgentClaude)
+	const workspace = "/srv/agentbox/data/users/alice/sessions/s1/workspace"
+	cmd := agentTermCommand([]string{envIntranetProxy + "=socks5h://x"}, "alpha", config.AgentClaude, workspace)
 	for _, want := range []string{
-		"/workspace/alpha",
+		workspace + "/alpha",
 		"exec claude",
 		"new-session -A -D -s " + shellQuote(agentTmuxSession("alpha")),
 		"set-environment -g " + envIntranetProxy + " 'socks5h://x'; ",

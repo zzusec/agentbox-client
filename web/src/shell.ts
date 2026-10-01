@@ -8,6 +8,7 @@ import type { View } from "./state.js";
 import { $, toast } from "./util.js";
 import { agentIcon, agentAvatar, agentName } from "./brand.js";
 import { hideTip, setTip } from "./tip.js";
+import { boundAccounts, instanceToolsLabel } from "./data.js";
 import { api } from "./api.js";
 
 /* ---- 侧栏：桌面收起偏好与移动抽屉各自独立 ---- */
@@ -50,11 +51,11 @@ function closeUserMenu(restoreFocus = false) {
 function positionUserMenu() {
   userMenu.style.removeProperty("left");
   userMenu.style.removeProperty("top");
-  if (narrowMQ.matches) return; // 抽屉有 transform，改由 CSS 在底栏上方定位。
+  if (narrowMQ.matches) return; // 窄屏铺满两侧，由 CSS 挂在顶栏下沿。
+  // 弹层挂在顶栏的账号按钮下方：它是全站唯一的账号入口，不再锚到侧栏底栏。
   const anchor = userButton.getBoundingClientRect();
-  const collapsed = document.documentElement.dataset.sidebarCollapsed === "true";
-  const left = collapsed ? sidebar.getBoundingClientRect().right + 8 : anchor.right - userMenu.offsetWidth;
-  const top = (collapsed ? anchor.bottom : anchor.top - 8) - userMenu.offsetHeight;
+  const left = anchor.right - userMenu.offsetWidth;
+  const top = anchor.bottom + 8;
   userMenu.style.left = Math.max(8, Math.min(left, innerWidth - userMenu.offsetWidth - 8)) + "px";
   userMenu.style.top = Math.max(8, Math.min(top, innerHeight - userMenu.offsetHeight - 8)) + "px";
 }
@@ -223,16 +224,34 @@ window.addEventListener("keydown", (e) => {
 });
 syncSidebar();
 
-/* ---- 顶栏：设置视图显示标题，工作台视图显示 状态灯+会话名+⋯菜单 ---- */
+/* ---- 顶栏：视图标题 / 项目名 + 面包屑 + 工作台状态 ---- */
 
 const VIEW_TITLE: Record<string, string> = {
-  workspaces: "工作空间配置", git: "Git 管理", settings: "系统设置", usage: "使用记录", tunnel: "内网隧道",
+  workspaces: "实例", git: "Git 管理", settings: "系统设置", usage: "使用记录", tunnel: "内网隧道",
 };
+
+/* 面包屑只画祖先层级：进入某实例的项目时是「实例名 / 项目名」，其余视图标题本身
+ * 就说明了位置，不再多一层。当前页永远在 #topbar-title 里。 */
+function renderCrumbs() {
+  const crumbs = $("topbar-crumbs");
+  crumbs.replaceChildren();
+  if (S.view !== "work" || !S.project || !S.current) return;
+  const ancestor = document.createElement("span");
+  ancestor.className = "topbar-crumb";
+  ancestor.textContent = S.current.name;
+  const separator = document.createElement("span");
+  separator.className = "topbar-crumb-sep";
+  separator.textContent = "/";
+  separator.setAttribute("aria-hidden", "true");
+  crumbs.append(ancestor, separator);
+}
 
 export function updateTopbarTitle() {
   const inWork = S.view === "work" && !!S.current;
   $("topbar-title").textContent = VIEW_TITLE[S.view] || (S.project?.name || S.current?.name || "项目");
+  // 账号名字在顶栏的账号按钮里；两侧保持一致（按钮里是唯一那处显示）。
   $("topbar-user").textContent = S.user;
+  renderCrumbs();
   const led = $("tb-led");
   led.classList.toggle("hidden", !inWork);
   led.classList.toggle("on", inWork && S.current!.status === "running");
@@ -299,8 +318,9 @@ export function renderSidebar() {
     card.dataset.sessionId = sess.id;
     if (active) card.setAttribute("aria-current", "page");
     const status = sess.status === "running" ? "运行中" : sess.stop_reason === "idle" ? "休眠" : "已停止";
-    card.setAttribute("aria-label", `${sess.name}（${agentName(sess.agent)}，${status}）`);
-    setTip(card, `${sess.name}\n${sess.account_label} · ${agentName(sess.agent)} · ${status}\n#${sess.id}`);
+    card.setAttribute("aria-label", `${sess.name}（${instanceToolsLabel(sess)}，${status}）`);
+    const accounts = boundAccounts(sess).map(account => `${agentName(account.tool)}：${account.label}`).join("\n") || "未绑定账号";
+    setTip(card, `${sess.name}\n${accounts}\n${status} · #${sess.id}`);
     const av = agentAvatar(sess.agent, { led: true });
     if (sess.status === "running") av.querySelector(".led")!.classList.add("on");
     const body = document.createElement("span");
@@ -310,7 +330,8 @@ export function renderSidebar() {
     h.textContent = sess.name;
     const meta = document.createElement("span");
     meta.className = "meta";
-    meta.textContent = sess.account_label || agentName(sess.agent);
+    // 一行放不下两个账号名，这里只报绑了哪几个工具；具体账号在实例页里。
+    meta.textContent = instanceToolsLabel(sess);
     body.append(h, meta);
     // 休眠 = 空闲自动停机（数据都在，发消息/开终端即自动唤醒）。与用户手动
     // 停止区分开，否则回来发现会话没了会以为服务出了故障。

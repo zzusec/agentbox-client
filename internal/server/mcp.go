@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"agentbox/internal/config"
 	"agentbox/internal/mcpconfig"
 	"agentbox/internal/store"
 )
@@ -42,7 +43,7 @@ func (s *Server) handleMCPUser(w http.ResponseWriter, r *http.Request) {
 	s.handleMCPConfig(w, r, reqUser(r).Name, "")
 }
 func (s *Server) handleMCPSession(w http.ResponseWriter, r *http.Request, sess store.Session) {
-	if sess.Agent != "claude" {
+	if sess.Agent != "claude" && sess.ClaudeAccountID == "" {
 		writeErr(w, 400, "MCP 管理首版仅支持 Claude")
 		return
 	}
@@ -83,7 +84,7 @@ func (s *Server) handleMCPConfig(w http.ResponseWriter, r *http.Request, user, i
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 func (s *Server) handleMCPAdopt(w http.ResponseWriter, r *http.Request, sess store.Session) {
-	if sess.Agent != "claude" {
+	if sess.Agent != "claude" && sess.ClaudeAccountID == "" {
 		writeErr(w, 400, "仅支持 Claude")
 		return
 	}
@@ -112,7 +113,7 @@ func (s *Server) runMCP(ctx context.Context, sess store.Session, payload any) (m
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	env, err := s.execEnv(sess)
+	env, err := s.execEnvFor(sess, config.AgentClaude, "")
 	if err != nil {
 		return result, err
 	}
@@ -125,7 +126,7 @@ func (s *Server) runMCP(ctx context.Context, sess store.Session, payload any) (m
 	defer release()
 	execCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 32*time.Second)
 	defer stop()
-	stream, err := s.dock.ExecStream(execCtx, sess.ContainerID, []string{"python3", "-I", "-c", mcpconfig.Helper}, env)
+	stream, err := s.dock.ExecStream(execCtx, sess.ContainerID, []string{"python3", "-I", "-c", mcpconfig.Helper}, env, "")
 	if err != nil {
 		return result, errors.New("无法启动 MCP 容器检测程序")
 	}
@@ -184,7 +185,7 @@ func (b *mcpOutput) Write(p []byte) (int, error) {
 	return n, nil
 }
 func (s *Server) syncMCP(ctx context.Context, sess store.Session) error {
-	if sess.Agent != "claude" {
+	if sess.Agent != "claude" && sess.ClaudeAccountID == "" {
 		return nil
 	}
 	return s.mcpService().Sync(ctx, sess.User, sess.ID, func(ctx context.Context, name string, expected, desired *mcpconfig.Definition) error {
@@ -199,11 +200,11 @@ func (s *Server) syncMCP(ctx context.Context, sess store.Session) error {
 	})
 }
 func (s *Server) handleMCPCheck(w http.ResponseWriter, r *http.Request, sess store.Session) {
-	if sess.Agent != "claude" {
+	if sess.Agent != "claude" && sess.ClaudeAccountID == "" {
 		writeErr(w, 400, "仅支持 Claude")
 		return
 	}
-	if _, err := s.sessionAccount(sess); err != nil {
+	if _, err := s.accountFor(sess, config.AgentClaude); err != nil {
 		writeErr(w, 403, err.Error())
 		return
 	}
@@ -279,7 +280,7 @@ func (s *Server) handleMCPUserImport(w http.ResponseWriter, r *http.Request) {
 	s.handleMCPImport(w, r, reqUser(r).Name, "")
 }
 func (s *Server) handleMCPSessionImport(w http.ResponseWriter, r *http.Request, sess store.Session) {
-	if sess.Agent != "claude" {
+	if sess.Agent != "claude" && sess.ClaudeAccountID == "" {
 		writeErr(w, 400, "仅支持 Claude")
 		return
 	}
@@ -288,7 +289,7 @@ func (s *Server) handleMCPSessionImport(w http.ResponseWriter, r *http.Request, 
 	}
 }
 func (s *Server) handleMCPCopy(w http.ResponseWriter, r *http.Request, sess store.Session) {
-	if sess.Agent != "claude" {
+	if sess.Agent != "claude" && sess.ClaudeAccountID == "" {
 		writeErr(w, 400, "仅支持 Claude")
 		return
 	}
@@ -316,7 +317,7 @@ func (s *Server) handleMCPCopy(w http.ResponseWriter, r *http.Request, sess stor
 // Defer incidental start/terminal/Git synchronization while a web turn is in
 // flight. runTurn synchronizes explicitly before starting its own CLI.
 func (s *Server) syncMCPOnStart(ctx context.Context, sess store.Session) error {
-	if sess.Agent != "claude" {
+	if sess.Agent != "claude" && sess.ClaudeAccountID == "" {
 		return nil
 	}
 	if s.chat != nil {

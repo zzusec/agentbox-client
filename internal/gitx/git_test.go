@@ -52,7 +52,7 @@ func TestRunnerRejectsTraversalBeforeStartingSession(t *testing.T) {
 		return "", nil, nil
 	})
 	for _, repo := range []string{"/etc", "../other", "project/../../other", "a/../b", "a\\b", "a\x00b"} {
-		if _, err := r.Run(t.Context(), "s1", repo, "status"); err == nil {
+		if _, err := r.Run(t.Context(), "s1", "/workspace", repo, "status"); err == nil {
 			t.Errorf("accepted %q", repo)
 		}
 	}
@@ -79,7 +79,7 @@ func TestRunnerPreservesArgumentsAndReleasesOnFailure(t *testing.T) {
 		}
 		return "container-1", func() { released = true }, nil
 	})
-	_, err := r.Run(t.Context(), "s1", "project with spaces", "commit", "-m", message)
+	_, err := r.Run(t.Context(), "s1", "/workspace", "project with spaces", "commit", "-m", message)
 	if !errors.Is(err, wantErr) || !released {
 		t.Fatalf("error=%v released=%v", err, released)
 	}
@@ -87,7 +87,7 @@ func TestRunnerPreservesArgumentsAndReleasesOnFailure(t *testing.T) {
 
 func TestRunnerFailsClosed(t *testing.T) {
 	var r *Runner
-	if _, err := r.Run(t.Context(), "s1", "", "status"); !errors.Is(err, ErrUnavailable) {
+	if _, err := r.Run(t.Context(), "s1", "/workspace", "", "status"); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("missing runtime: %v", err)
 	}
 	denied := errors.New("quota denied")
@@ -97,7 +97,7 @@ func TestRunnerFailsClosed(t *testing.T) {
 	}), func(context.Context, string) (string, func(), error) {
 		return "", nil, denied
 	})
-	if _, err := r.Run(t.Context(), "s1", "", "status"); !errors.Is(err, denied) {
+	if _, err := r.Run(t.Context(), "s1", "/workspace", "", "status"); !errors.Is(err, denied) {
 		t.Fatalf("prepare error: %v", err)
 	}
 }

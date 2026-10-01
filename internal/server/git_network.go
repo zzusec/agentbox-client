@@ -140,7 +140,7 @@ func (s *Server) runGitNetwork(ctx context.Context, sess store.Session, dir stri
 	}
 	options := []string{"-c", "protocol.allow=never", "-c", "protocol.http.allow=always", "-c", "protocol.git.allow=always", "-c", "credential.helper=", "-c", "http.extraHeader=", "-c", "http.proxy=", "-c", "http.followRedirects=false", "-c", "fetch.recurseSubmodules=false", "-c", "push.recurseSubmodules=no"}
 	gitPhase(ctx, "transferring")
-	return s.git.RunNetwork(ctx, sess.ID, filepath.ToSlash(rel), append(options, args...)...)
+	return s.git.RunNetwork(ctx, sess.ID, s.containerWorkspace(ctx, sess), filepath.ToSlash(rel), append(options, args...)...)
 }
 
 func (s *Server) gitBoundConnection(ctx context.Context, sess store.Session, dir, remote string, write bool) (store.GitConnection, store.GitBinding, error) {
@@ -558,7 +558,7 @@ func (s *Server) handleGitClone(w http.ResponseWriter, r *http.Request, sess sto
 	defer closeFn()
 	temp := ".abox-clone-" + store.NewID() + store.NewID()
 	defer root.RemoveAll(temp)
-	_, err = s.runGitNetwork(ctx, sess, s.workspaceDir(sess), "clone", "--no-checkout", "--no-tags", "--no-recurse-submodules", "--", transport, "/workspace/"+temp)
+	_, err = s.runGitNetwork(ctx, sess, s.workspaceDir(sess), "clone", "--no-checkout", "--no-tags", "--no-recurse-submodules", "--", transport, filepath.Join(s.containerWorkspace(ctx, sess), temp))
 	if err != nil {
 		writeErr(w, 502, "克隆失败：请检查连接权限、Token、网络或仓库地址，目标文件夹未发布")
 		return

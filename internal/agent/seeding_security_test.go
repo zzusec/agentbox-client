@@ -18,7 +18,7 @@ func TestSeedingRejectsSymlinkedProviderDirectory(t *testing.T) {
 			if err := os.Symlink(outside, filepath.Join(home, "."+kind)); err != nil {
 				t.Fatal(err)
 			}
-			if err := SeedCredentials(kind, home, pool, os.Getuid(), os.Getgid()); err == nil {
+			if err := SeedCredentials(home, []AccountSeed{{AgentType: kind, CredDir: pool}}, os.Getuid(), os.Getgid()); err == nil {
 				t.Fatal("credential seed followed link")
 			}
 			if err := SeedIntranetHint(kind, home, os.Getuid(), os.Getgid()); err == nil {
@@ -46,7 +46,7 @@ func TestSeedingDoesNotOverwriteHardLinkedFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(pool, "auth.json"), []byte("new"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := SeedCredentials(config.AgentCodex, home, pool, os.Getuid(), os.Getgid()); err != nil {
+	if err := SeedCredentials(home, []AccountSeed{{AgentType: config.AgentCodex, CredDir: pool}}, os.Getuid(), os.Getgid()); err != nil {
 		t.Fatal(err)
 	}
 	if raw, _ := os.ReadFile(outside); string(raw) != "outside" {

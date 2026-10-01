@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -84,8 +85,13 @@ func termCommand(env []string) string {
 // agentTermCommand opens the interactive coding agent for one workspace
 // project. Each project gets a stable tmux session so several projects can run
 // independently, and reconnecting attaches to the same agent process.
-func agentTermCommand(env []string, project, agentType string) string {
-	projectPath := "/workspace/" + project
+//
+// workspace is the instance workspace directory on the host. The container
+// mounts that directory at the same absolute path, so the directory the agent
+// starts in is the path the user sees everywhere else — including on their own
+// machine, where abox-sync mirrors the project under the same name.
+func agentTermCommand(env []string, project, agentType, workspace string) string {
+	projectPath := filepath.Join(workspace, project)
 	program := "claude"
 	if agentType == config.AgentCodex {
 		program = "codex"
@@ -247,7 +253,18 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request, sess store
 	//       exec exits cleanly, and the frontend treats clean closes as final
 	//       rather than auto-reconnecting, so two tabs don't fight)
 	// Containers built from pre-tmux images fall back to a plain bash.
-	env, err := s.execEnv(sess)
+	tool := sess.Agent
+	if termReq.mode == "agent" {
+		project, projectErr := s.projectByName(sess, termReq.project)
+		if projectErr != nil {
+			writeErr(w, http.StatusBadRequest, "项目不存在")
+			return
+		}
+		if project.Agent != "" {
+			tool = project.Agent
+		}
+	}
+	env, err := s.execEnvFor(sess, tool, termReq.project)
 	if err != nil {
 		if conn, upgradeErr := s.upgrader.Upgrade(w, r, nil); upgradeErr == nil {
 			closeWithReason(conn, closeAccountAccess, err.Error())
@@ -256,10 +273,11 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request, sess store
 		return
 	}
 	command := termCommand(env)
+	workDir := s.containerWorkspace(r.Context(), sess)
 	if termReq.mode == "agent" {
-		command = agentTermCommand(env, termReq.project, sess.Agent)
+		command = agentTermCommand(env, termReq.project, tool, workDir)
 	}
-	pty, err := s.dock.ExecPTY(r.Context(), sess.ContainerID, []string{"/bin/bash", "-c", command}, env)
+	pty, err := s.dock.ExecPTY(r.Context(), sess.ContainerID, []string{"/bin/bash", "-c", command}, env, workDir)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "exec: "+err.Error())
 		return

@@ -35,14 +35,27 @@ const (
 	monMaxWindow = 60 * time.Second
 )
 
+// monState 的 scope。管理员监控页与普通用户的实例资源卡片轮询节奏和覆盖范围都
+// 不同，各自留一套基准帧，互相不污染（见 monState.rotate）。
+const monScopeAdmin = "admin"
+
+// monScopeForInstance / monScopeForUser 是两个用户侧 scope：单实例卡片和实例列表
+// 各有各的轮询节奏。
+func monScopeForInstance(id string) string { return "sess:" + id }
+func monScopeForUser(user string) string   { return "user:" + user }
+
 // monState 缓存上一次请求的计数器快照。CPU 是累计计数器，单次读数还原不出
 // 速率，所以把上一帧留下来给下一帧做差。
+//
+// 帧按 scope 分开存：CPU 速率靠前后两帧的差，而管理员监控页和普通用户的实例
+// 卡片轮询的节奏、覆盖的容器都不同。共用一个基准会让两边互相把对方的窗口拉成
+// 一两秒或一分钟，谁看到的速率都不对。
 type monState struct {
 	mu   sync.Mutex
-	prev *monSample
+	prev map[string]*monSample
 }
 
-func newMonState() *monState { return &monState{} }
+func newMonState() *monState { return &monState{prev: map[string]*monSample{}} }
 
 // monSample 是一次请求里同时取到的三方累计计数器。
 type monSample struct {
@@ -52,21 +65,21 @@ type monSample struct {
 	stats map[string]dockerx.RawStat // 每个运行中容器的累计快照
 }
 
-// rotate 用本帧快照更新缓存，返回可用于测速的上一帧与本帧窗口。窗口无效时返回
-// 0：太短则保留旧基准（等下次拉开间隔），太长则刷新基准（下一帧才准）。
-func (m *monState) rotate(cur monSample) (monSample, time.Duration) {
+// rotate 用本帧快照更新该 scope 的缓存，返回可用于测速的上一帧与本帧窗口。窗口
+// 无效时返回 0：太短则保留旧基准（等下次拉开间隔），太长则刷新基准（下一帧才准）。
+func (m *monState) rotate(scope string, cur monSample) (monSample, time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	prev := m.prev
+	prev := m.prev[scope]
 	if prev == nil {
-		m.prev = &cur
+		m.prev[scope] = &cur
 		return monSample{}, 0
 	}
 	d := cur.at.Sub(prev.at)
 	if d < monMinWindow {
 		return monSample{}, 0 // 太近：不动基准，避免除以极小窗口
 	}
-	m.prev = &cur
+	m.prev[scope] = &cur
 	if d > monMaxWindow {
 		return monSample{}, 0 // 太远：基准已刷新，但这帧不测速
 	}
@@ -114,6 +127,7 @@ type containerStat struct {
 	User       string  `json:"user"`
 	Agent      string  `json:"agent"`
 	AccountID  string  `json:"account_id"`
+	ProxyID    string  `json:"proxy_id"`
 	Running    bool    `json:"running"`
 	CreatedAt  int64   `json:"created_at"`  // 会话创建时间(ms)
 	StartedAt  int64   `json:"started_at"`  // 容器本次启动时间(ms)，0=未运行/未知
@@ -121,6 +135,12 @@ type containerStat struct {
 	MemUsage   uint64  `json:"mem_usage"`
 	MemLimit   uint64  `json:"mem_limit"`
 	Pids       uint64  `json:"pids"`
+	NetRxBytes uint64  `json:"net_rx_bytes"` // 累计，非速率
+	NetTxBytes uint64  `json:"net_tx_bytes"` // 累计，非速率
+	// DiskBytes 是工作区 + home 的占用；DiskStale=true 表示这一帧还没算出来
+	// （首次请求或缓存过期），前端显示「统计中」而不是把它当成 0。
+	DiskBytes uint64 `json:"disk_bytes"`
+	DiskStale bool   `json:"disk_stale"`
 }
 
 // handleMonitor 采样一次窗口并返回后端进程、主机与全部会话容器的资源快照。
@@ -154,7 +174,7 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 		host:  readHostCPU(),
 		stats: s.dock.StatSnapshots(ctx, runningIDs),
 	}
-	prev, window := s.mon.rotate(cur)
+	prev, window := s.mon.rotate(monScopeAdmin, cur)
 	rate := window > 0 // 本帧窗口有效，可给 CPU 速率
 
 	var mem runtime.MemStats
@@ -188,14 +208,18 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, m := range metas {
+		bytes, fresh := s.diskUsage().peek(s.instanceDiskKey(m.sess))
 		row := containerStat{
 			SessionID: m.sess.ID,
 			Name:      m.sess.Name,
 			User:      m.sess.User,
 			Agent:     m.sess.Agent,
 			AccountID: m.sess.AccountID,
+			ProxyID:   m.sess.ProxyID,
 			Running:   m.running,
 			CreatedAt: m.sess.CreatedAt.UnixMilli(),
+			DiskBytes: bytes,
+			DiskStale: !fresh,
 		}
 		view.Summary.Total++
 		if m.running {
@@ -208,6 +232,8 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 				row.MemUsage = b.MemUsage
 				row.MemLimit = b.MemLimit
 				row.Pids = b.Pids
+				row.NetRxBytes = b.NetRx
+				row.NetTxBytes = b.NetTx
 				view.Summary.MemUsage += b.MemUsage
 				if rate {
 					if a, ok := prev.stats[m.sess.ContainerID]; ok && a.OK {
@@ -219,6 +245,12 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 		}
 		view.Containers = append(view.Containers, row)
 	}
+	// 遍历目录不能拖慢监控页：先返回这一帧，后台补齐下一帧就有值。
+	diskKeys := make([]string, 0, len(metas))
+	for _, m := range metas {
+		diskKeys = append(diskKeys, s.instanceDiskKey(m.sess))
+	}
+	s.diskUsage().warm(diskKeys)
 	// 运行中的排在前面，各自按创建时间倒序，最近建的会话在上。
 	sort.SliceStable(view.Containers, func(i, j int) bool {
 		a, b := view.Containers[i], view.Containers[j]

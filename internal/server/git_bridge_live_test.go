@@ -145,7 +145,7 @@ func TestGitBridgeContainerLive(t *testing.T) {
 			}
 			run := func(args ...string) string {
 				t.Helper()
-				out, err := s.git.Run(ctx, sess.ID, "", args...)
+				out, err := s.git.Run(ctx, sess.ID, s.workspaceDir(sess), "", args...)
 				if err != nil {
 					t.Fatalf("container Git %s: %v", args[0], err)
 				}

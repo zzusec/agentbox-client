@@ -135,18 +135,31 @@ func (s *Service) scanTerminalUsage(sc *Scanner) {
 // scanSessionUsage 补记一个会话的终端消耗。inotify 命中时只扫这一个会话，
 // 不必为了一次写入把所有人的 transcript 都摸一遍。
 func (s *Service) scanSessionUsage(sc *Scanner, sess store.Session) {
-	adapter, err := agent.Lookup(sess.Agent)
-	if err != nil || !adapter.Capabilities().TerminalUsage {
-		return
+	// 一个实例可能同时绑了 claude 和 codex 两套凭证，两边都会留下 transcript。
+	// 只按实例默认工具扫一遍，会把另一边的消耗全记到同一个账号上——账单和限流
+	// 都会失真，所以两个工具各扫一遍，各自归到自己的账号。
+	for _, tool := range []string{config.AgentClaude, config.AgentCodex} {
+		if !sess.HasTool(tool) {
+			continue
+		}
+		adapter, err := agent.Lookup(tool)
+		if err != nil || !adapter.Capabilities().TerminalUsage {
+			continue
+		}
+		dir := filepath.Join(s.homeDir(sess), ".claude", "projects")
+		pattern := "*/*.jsonl"
+		parser := parseTerminalReader
+		if tool == config.AgentCodex {
+			dir = filepath.Join(s.homeDir(sess), ".codex", "sessions")
+			pattern = "*/*/*/rollout-*.jsonl"
+			parser = parseCodexTerminal
+		}
+		s.scanSessionDir(sc, sess, tool, dir, pattern, parser)
 	}
-	dir := filepath.Join(s.homeDir(sess), ".claude", "projects")
-	pattern := "*/*.jsonl"
-	parser := parseTerminalReader
-	if sess.Agent == config.AgentCodex {
-		dir = filepath.Join(s.homeDir(sess), ".codex", "sessions")
-		pattern = "*/*/*/rollout-*.jsonl"
-		parser = parseCodexTerminal
-	}
+}
+
+// scanSessionDir 补记一个会话某个工具的 transcript 目录。
+func (s *Service) scanSessionDir(sc *Scanner, sess store.Session, tool, dir, pattern string, parser func(io.Reader) ([]termTurn, error)) {
 	root, err := s.openDataDir(dir)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
@@ -202,9 +215,9 @@ func (s *Service) scanSessionUsage(sc *Scanner, sess store.Session) {
 			ev := t.ev
 			ev.TS = t.ts
 			ev.User, ev.SessionID = sess.User, sess.ID
-			ev.Agent, ev.AccountID = sess.Agent, sess.AccountID
+			ev.Agent, ev.AccountID = tool, sess.AccountForTool(tool)
 			ev.Model, ev.ReqID = t.model, t.reqID
-			if sess.Agent == config.AgentCodex {
+			if tool == config.AgentCodex {
 				ev.ReqID = sess.ID + ":" + ev.ReqID
 				ev.TurnID = sess.ID + ":" + ev.TurnID
 			}

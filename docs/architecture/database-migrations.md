@@ -14,6 +14,14 @@ SQLite 使用 `PRAGMA user_version` 记录 schema。迁移按 `internal/store/mi
 | 7 | Git 连接的不可变网络路由与公司 CA |
 | 8 | 共享 Git 服务账号的用户读写授权 |
 | 9 | usage_messages 按工作空间和 Claude 消息 ID 持久去重；与用量、额度同事务提交，不改历史费用 |
+| 10 | sync_projects / sync_leases：本地目录与服务端项目的双向同步注册表和租约 |
+| 11 | 实例可同时绑定 claude 与 codex 账号（claude_account_id / codex_account_id）、实例级必填出口代理（proxy_id）、按工具拆分的默认模型（default_model_claude / default_model_codex）、项目的开发工具（sync_projects.agent）与宿主绝对路径（sync_projects.path）；删除工作空间补齐同步与消息级联 |
+
+新增列全部为 `NOT NULL DEFAULT ''`，迁移是纯加法，旧二进制仍能读取未知列之外的字段。但 `runMigrations` 会因 `user_version` 高于支持值拒绝启动，所以**回退只能靠备份，不能原地降级**。
+
+v11 的数据回填（账号分列、继承既有代理、项目路径、默认模型）不在迁移事务里做：它同时需要 config.json 与数据目录，只有 server 层能拿到。回填幂等且只填空值，服务启动时在 reconcile 之前执行；没有既有账号代理时留空，不自动挑选池中代理或改变旧实例出口。默认模型只回填原工具对应列，不跨 Claude/Codex 继承。回填后仍缺少可用代理的实例会拒绝启动；`proxy_bridge.require_instance_proxy=false` 是管理员显式允许旧实例直连的应急开关，不是新建实例省略住宅代理的通道。`AGENTBOX_MIGRATE_DRYRUN=1` 只跳过服务器数据回填，不能阻止更早发生的 SQLite schema 迁移，须在备份副本上使用。
+
+新容器同时挂载 `/workspace` 与宿主工作目录；旧容器保留原挂载和容器 ID，不因 schema 升级、挂载差异或镜像更新而自动删除重建。旧容器无法安全复用时明确报错，迁移须另行授权。服务器目录、容器内路径与 Mac 本机目录不是同一概念；每项目任意独立本机目录映射仍待实现，不能把 `sync_projects.path` 当成本机路径配置。
 
 v0.1.3 使用 schema 8，可从 v0.1.2 的 schema 3 自动升级；新建 Git 表和索引，不删除已有空间、用户、用量和额度。迁移后旧版本不能直接打开数据库。Git 密钥目录须与配置、数据库一起备份，执行过密钥轮换后还须保留配套版本化 keyring。
 

@@ -1,33 +1,10 @@
-:root {
-  --amber: #8ab4ff;
-  --amber-dim: #284778;
-  --accent: #2563eb;
-  --accent-hi: #1d4ed8;
-  --on-accent: #fff;
-  --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-}
-:root[data-theme="light"] {
-  --bg: #f8fafc;
-  --panel: #fff;
-  --panel-2: #f1f5f9;
-  --line: #e2e8f0;
-  --line-soft: #edf1f6;
-  --text: #172033;
-  --text-hi: #0f172a;
-  --muted: #64748b;
-  --amber: #2563eb;
-  --amber-dim: #bfdbfe;
-  --accent: #2563eb;
-  --accent-hi: #1d4ed8;
-  --shadow-sm: 0 1px 3px rgb(15 23 42 / 5%);
-  --shadow-md: 0 8px 24px rgb(15 23 42 / 8%);
-}
+/* 控制台外观。
+ *
+ * 这里**不再定义任何 `--*` 令牌**：原先的 `:root` 覆盖块已合进 base.css。
+ * 本文件在 index.html 中最后加载，一旦它重定义令牌，就成了「同一令牌两处真值」
+ * ——改 base.css 不生效、改这里只有部分组件跟着变，顶部配色尤其容易踩。 */
 .btn { border-radius: 10px; }
-/* 顶栏仅窄屏出现（shell.css 默认 display:none，≤760px 才 flex）；
- * 桌面侧栏已有品牌/主题/用户，顶栏整体隐藏避免双导航。 */
-.console-brand { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 700; }
-.console-brand .mark { width: 30px; height: 30px; margin: 0; }
-.console-brand small { display: block; color: var(--muted); font-size: 11px; font-weight: 500; margin-top: 1px; }
+/* 顶栏在桌面与窄屏都出现（shell.css 负责显示），这里只描述它的内容。 */
 .console-top-tools { display: flex; align-items: center; gap: 16px; }
 .console-top-tools [data-theme-ico] { display: flex; }
 .console-top-tools [data-theme-ico] svg { display: none; }
@@ -37,8 +14,10 @@
 .console-user { max-width: 160px; overflow: hidden; text-overflow: ellipsis; font-size: 13px; font-weight: 600; }
 .topbar .menu-btn { background: transparent; border-color: transparent; }
 .sidebar { width: 248px; border-right: 0; background: var(--bg); }
-.side-head { height: 62px; padding: 0 20px; border: 0; }
-.side-brand { font-size: 13px; letter-spacing: .03em; }
+/* 侧栏顶格与顶栏等高，由 --page-head-height 一处决定（原先这里写死 62px，
+ * 于是桌面顶栏和侧栏顶格永远差一截）。 */
+.side-head { height: var(--page-head-height); padding: 0 20px; border: 0; justify-content: flex-end; }
+.side-brand-name { white-space: nowrap; }
 .side-mark { width: 27px; height: 27px; }
 .side-create { padding: 8px 16px 18px; }
 .side-new { border-radius: 12px; color: var(--on-accent); background: var(--accent); border-color: var(--accent); justify-content: center; height: 42px; }
@@ -58,7 +37,6 @@
 .side-tools .side-tool { width: 100%; height: 42px; justify-content: flex-start; padding-inline: 12px; }
 .side-tools .side-item-label { display: inline; }
 .side-tools .conn-latency { min-height: 28px; flex: none; padding-inline: 12px; }
-.side-preferences { margin-top: 12px; }
 .main { padding: 12px 16px 16px 0; }
 .main > .view { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 22px; overflow: hidden; box-shadow: var(--shadow-sm); }
 .console-page { flex: 1; min-height: 0; overflow: auto; padding: 30px; color: var(--text); }
@@ -95,9 +73,26 @@
 .tile-heading .tile-title { flex: 1; min-width: 0; }
 .console-status { flex: none; padding: 4px 8px; border-radius: 6px; color: var(--muted); background: var(--panel-2); font-size: 11px; }
 .console-status.running { color: var(--green); background: color-mix(in srgb, var(--green) 9%, var(--panel)); }
-.workspace-details { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 12px; font-size: 12px; line-height: 1.5; margin: 22px 0; }
+.workspace-details { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 12px; font-size: 12px; line-height: 1.5; margin: 22px 0 14px; }
 .workspace-details dt { color: var(--muted); }
 .workspace-details dd { margin: 0; overflow-wrap: anywhere; }
+/* 实例卡片的实时资源：同一套 dt/dd 网格，值用等宽字体（数字要对齐才好比较）。 */
+.workspace-usage { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 12px; margin: 0 0 4px; font-size: 12px; line-height: 1.5; }
+.workspace-usage dt { color: var(--muted); }
+.workspace-usage dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
+/* 项目卡与它的设置按钮：两者必须是兄弟节点（button 不能嵌 button，否则点击和
+ * 焦点都会被浏览器重新分配）。设置按钮浮在卡片右上角。 */
+.project-tile-wrap { position: relative; display: flex; }
+.project-tile-wrap .project-tile { flex: 1; min-width: 0; }
+.project-tile-settings {
+  position: absolute; top: 12px; right: 12px;
+  width: 30px; height: 30px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: 8px;
+  background: transparent; color: var(--muted);
+}
+.project-tile-settings:hover { color: var(--text); background: var(--panel-2); border-color: var(--line); }
+.project-tile-settings:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
 .tile-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding-top: 16px; border-top: 1px solid var(--line-soft); }
 .tile-actions .btn { font-size: 12px; }
 .console-empty { display: flex; align-items: center; flex-direction: column; padding: 52px 20px; text-align: center; background: var(--panel-2); border: 1px dashed var(--line); border-radius: 16px; }
@@ -128,13 +123,16 @@ dialog:not(.dlg-file):not(.dlg-img) { border-radius: 18px; }
 }
 @media (max-width: 760px) {
   .topbar { min-height: 56px; padding: 8px 12px; gap: 8px; }
-  .console-brand, .console-top-tools { display: none; }
+  /* 主题与账号只在顶栏这一处，窄屏也必须留着；让位的是品牌文字和用户名。 */
+  .console-top-tools { gap: 8px; }
+  /* 页面标题栏的标题与顶栏标题是同一句话——窄屏顶栏已经显示了它，这里只保留
+   * 右侧的操作按钮（新建项目 / 新建工作空间），否则顶部会出现两行一样的标题。 */
+  .console-page-head > div { display: none; }
+  .console-page-head { justify-content: flex-end; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
   .sidebar { background: var(--panel); }
   .main { padding: 0; }
   .main > .view { border: 0; border-radius: 0; box-shadow: none; }
   .console-page { padding: 22px 16px max(24px, env(safe-area-inset-bottom)); }
-  .console-page-head { gap: 14px; flex-wrap: wrap; margin-bottom: 22px; }
-  .console-page-head h1 { font-size: 24px; }
   .console-stats { gap: 8px; margin-bottom: 24px; }
   .console-stat { padding: 12px 10px; grid-template-columns: minmax(0, 1fr); gap: 10px; border-radius: 12px; }
   .console-stat .console-icon { width: 30px; height: 30px; }

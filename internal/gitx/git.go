@@ -46,7 +46,9 @@ func (r *Runner) Lock(ctx context.Context, sessionID, repo string) (func(), erro
 	if r == nil || r.exec == nil || r.prepare == nil {
 		return nil, ErrUnavailable
 	}
-	if _, err := command(repo, nil); err != nil {
+	// Lock only validates the path and keys the mutex; the root is irrelevant
+	// here, so the default is fine.
+	if _, err := command("", repo, nil); err != nil {
 		return nil, err
 	}
 	key := sessionID + "\x00" + path.Clean(repo)
@@ -84,21 +86,24 @@ func New(exec Executor, prepare Prepare) *Runner {
 	return &Runner{exec: exec, prepare: prepare}
 }
 
-func (r *Runner) Run(ctx context.Context, sessionID, repo string, args ...string) (string, error) {
-	return r.run(ctx, sessionID, repo, false, args...)
+// Run executes git inside the container. root is the workspace root inside
+// the container; an empty root falls back to /workspace, the historical mount
+// point, so callers that never learned about the host path keep working.
+func (r *Runner) Run(ctx context.Context, sessionID, root, repo string, args ...string) (string, error) {
+	return r.run(ctx, sessionID, root, repo, false, args...)
 }
 
 // RunNetwork uses a longer in-container timeout for bounded network transfers.
 // The URL must be an operation-scoped transport grant, never a provider token.
-func (r *Runner) RunNetwork(ctx context.Context, sessionID, repo string, args ...string) (string, error) {
-	return r.run(ctx, sessionID, repo, true, args...)
+func (r *Runner) RunNetwork(ctx context.Context, sessionID, root, repo string, args ...string) (string, error) {
+	return r.run(ctx, sessionID, root, repo, true, args...)
 }
 
-func (r *Runner) run(ctx context.Context, sessionID, repo string, network bool, args ...string) (string, error) {
+func (r *Runner) run(ctx context.Context, sessionID, root, repo string, network bool, args ...string) (string, error) {
 	if r == nil || r.exec == nil || r.prepare == nil {
 		return "", ErrUnavailable
 	}
-	cmd, err := command(repo, args)
+	cmd, err := command(root, repo, args)
 	if err != nil {
 		return "", err
 	}
@@ -124,7 +129,7 @@ func (r *Runner) run(ctx context.Context, sessionID, repo string, network bool, 
 	return r.exec.ExecCommand(ctx, containerID, cmd)
 }
 
-func command(repo string, args []string) ([]string, error) {
+func command(root, repo string, args []string) ([]string, error) {
 	// Paths are relative Linux paths, independently of the server's OS. Reject
 	// traversal before cleaning, and keep user strings in argv (never a shell).
 	if path.IsAbs(repo) || strings.ContainsAny(repo, "\\\x00") {
@@ -135,7 +140,10 @@ func command(repo string, args []string) ([]string, error) {
 			return nil, errors.New("invalid Git repository path")
 		}
 	}
-	dir := path.Join("/workspace", repo)
+	if root == "" {
+		root = "/workspace"
+	}
+	dir := path.Join(root, repo)
 	// Closing a Docker exec connection doesn't kill its process. timeout runs
 	// inside the container and bounds Git and its process group independently
 	// of the request connection. Both utilities ship in the Debian agent image.

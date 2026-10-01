@@ -47,6 +47,7 @@ func TestCodexTerminalScanUpdatesWithoutChargingAndKeepsSnapshot(t *testing.T) {
 	s, sess := newTestServer(t)
 	sess.Agent = "codex"
 	sess.AccountID = "acct"
+	sess.AccountID = "acct"
 	if err := s.store.Put(sess); err != nil {
 		t.Fatal(err)
 	}
@@ -104,6 +105,7 @@ func TestCodexCounterResetAndPartialTail(t *testing.T) {
 func TestCodexCopiesInDifferentWorkspacesDoNotOverwrite(t *testing.T) {
 	s, sess := newTestServer(t)
 	sess.Agent = "codex"
+	sess.AccountID = "acct"
 	fixture := codexFixture(t)
 	for _, id := range []string{"one", "two"} {
 		sess.ID = id

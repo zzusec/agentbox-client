@@ -5,7 +5,51 @@
 import { Poller } from "./shared/poller.js";
 import { S, emit } from "./state.js";
 import { api } from "./api.js";
+import { agentKey, agentName } from "./brand.js";
 import type { Account, Me, Session } from "./types.js";
+
+/** 账号池里的展示名；查不到时回退 id，绝不显示空白。 */
+export function accountLabel(id: string): string {
+  if (!id) return "";
+  return S.accounts.find(account => account.id === id)?.label || id;
+}
+
+export interface BoundAccount {
+  tool: "claude" | "codex";
+  id: string;
+  label: string;
+}
+
+/** 实例绑定的账号，按工具拆开。
+ *
+ * 一个实例可以同时绑 Claude 和 Codex。服务端下发的 *_account_id 是权威来源；
+ * 只带旧 account_id 的行（尚未回填）按默认工具归位，界面才不会把老实例显示成
+ * 「未绑定账号」。放在 data.js 而不是 shell.js/sessions.js：这三个模块互相引用
+ * 会成环，而 data.js 只依赖 state/api。 */
+export function boundAccounts(sess: Session): BoundAccount[] {
+  const out: BoundAccount[] = [];
+  for (const tool of ["claude", "codex"] as const) {
+    const id = (tool === "claude" ? sess.claude_account_id : sess.codex_account_id) || "";
+    if (!id) continue;
+    const label = (tool === "claude" ? sess.claude_account_label : sess.codex_account_label) || accountLabel(id);
+    out.push({ tool, id, label });
+  }
+  if (!out.length && sess.account_id) {
+    out.push({ tool: agentKey(sess.agent), id: sess.account_id, label: sess.account_label || accountLabel(sess.account_id) });
+  }
+  return out;
+}
+
+/** 实例当前可用的工具；项目里的开发工具只在这几个里选。 */
+export function instanceTools(sess: Session): ("claude" | "codex")[] {
+  return boundAccounts(sess).map(account => account.tool);
+}
+
+/** 实例的工具概览文案，例如「Claude Code + Codex CLI」。 */
+export function instanceToolsLabel(sess: Session): string {
+  const tools = boundAccounts(sess);
+  return tools.length ? tools.map(account => agentName(account.tool)).join(" + ") : "未绑定账号";
+}
 
 export async function refreshAll(signal?: AbortSignal) {
   try {

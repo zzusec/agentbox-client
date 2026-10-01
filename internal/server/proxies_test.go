@@ -100,14 +100,18 @@ var testProxies = []config.Proxy{
 
 func TestProxyEnvListInjectsBothCases(t *testing.T) {
 	s := newProxyServer("px1", testProxies)
-	sess := store.Session{ID: "s1", User: "alice", AccountID: "claude-1"}
+	sess := store.Session{ID: "s1", User: "alice", AccountID: "claude-1", ProxyID: "px1"}
 
 	env := map[string]string{}
-	for _, kv := range s.proxyEnvList(sess) {
+	vars, err := s.proxyEnvList(sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kv := range vars {
 		k, v, _ := strings.Cut(kv, "=")
 		env[k] = v
 	}
-	want := "http://claude-1:" + s.proxySecret("claude-1") + "@172.17.0.1:1081"
+	want := "http://s1:" + s.proxySecret("s1") + "@172.17.0.1:1081"
 	// 大小写两套都得给：curl 只认小写 http_proxy，Node/Go 读大写，漏一半的
 	// 后果是「有些请求悄悄走了服务器自己的 IP」，而不是报错。
 	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
@@ -134,8 +138,10 @@ func TestProxyEnvListInjectsBothCases(t *testing.T) {
 
 func TestProxyEnvListEmptyWithoutBinding(t *testing.T) {
 	s := newProxyServer("", testProxies)
+	require := false
+	s.cfg.ProxyBridge.RequireInstanceProxy = &require
 	sess := store.Session{ID: "s1", User: "alice", AccountID: "claude-1"}
-	if env := s.proxyEnvList(sess); len(env) != 0 {
+	if env, err := s.proxyEnvList(sess); err != nil || len(env) != 0 {
 		t.Errorf("没绑定代理的账号不该被注入代理变量: %v", env)
 	}
 }
@@ -146,9 +152,9 @@ func TestProxyEnvListKeepsInjectingWhenProxyBroken(t *testing.T) {
 	s := newProxyServer("px1", []config.Proxy{
 		{ID: "px1", Name: "香港", Scheme: "socks5", Host: "1.2.3.4", Port: 1080, Disabled: true},
 	})
-	sess := store.Session{ID: "s1", User: "alice", AccountID: "claude-1"}
-	if env := s.proxyEnvList(sess); len(env) == 0 {
-		t.Error("代理停用时也必须注入，绝不能静默改走直连")
+	sess := store.Session{ID: "s1", User: "alice", AccountID: "claude-1", ProxyID: "px1"}
+	if _, err := s.proxyEnvList(sess); err == nil {
+		t.Error("代理停用时必须拒绝启动，绝不能静默改走直连")
 	}
 }
 

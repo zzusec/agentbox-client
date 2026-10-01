@@ -1,20 +1,9 @@
-/* Version entry and update details share the existing theme tokens. */
-.side-head:has(.version-badge:not(.hidden)) {
-  display: grid; grid-template-columns: minmax(0, 1fr) 28px;
-  grid-template-rows: 20px 22px; align-content: center;
-  height: 76px; padding-inline: 12px; gap: 4px 10px;
-}
-.side-head:has(.version-badge:not(.hidden)) .side-brand {
-  grid-area: 1 / 1; position: relative; display: block;
-  padding-left: 50px; font-size: 15px; line-height: 20px; letter-spacing: .06em;
-}
-.side-head:has(.version-badge:not(.hidden)) .side-brand-name { display: block; overflow: hidden; text-overflow: ellipsis; }
-.side-head:has(.version-badge:not(.hidden)) .side-mark { position: absolute; left: 0; top: 2px; width: 40px; height: 40px; }
-.side-head:has(.version-badge:not(.hidden)) :is(.side-collapse, .side-close) { grid-area: 1 / 2 / 3 / 3; align-self: center; }
+/* Version entry and update details share the existing theme tokens.
+ * 版本入口现在挂在顶栏工具区里（原来嵌在侧栏顶格，靠 :has() 给侧栏排两行网格）。
+ * 顶栏是一行 flex，不需要网格，这里只负责按钮自身的外观。 */
 .version-badge {
   display: inline-flex; align-items: center; gap: 5px; flex: none;
-  grid-area: 2 / 1; justify-self: start; margin-left: 50px;
-  min-height: 22px; max-width: calc(100% - 50px); padding: 3px 6px;
+  min-height: 26px; padding: 3px 7px;
   border: 1px solid transparent; border-radius: 6px;
   background: var(--panel-2); color: var(--muted);
   font: 10px var(--mono); white-space: nowrap;
@@ -75,13 +64,10 @@
 [data-update-check].checking svg { animation: version-spin 1s linear infinite; }
 @keyframes version-spin { to { transform: rotate(360deg); } }
 @keyframes version-reveal { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
-@media (min-width: 761px) {
-  :root[data-sidebar-collapsed="true"] .side-head:has(.version-badge:not(.hidden)) { display: flex; height: 94px; flex-direction: column; gap: 5px; padding: 0; }
-  :root[data-sidebar-collapsed="true"] .side-head:has(.version-badge:not(.hidden)) .side-brand { display: none; }
-  :root[data-sidebar-collapsed="true"] .version-badge { order: 1; margin-left: 0; max-width: 60px; font-size: 9px; }
-}
 @media (max-width: 760px) {
-  .side-head:has(.version-badge:not(.hidden)) { padding-inline: 16px; grid-template-columns: minmax(0, 1fr) 36px; }
+  /* 顶栏放不下版本号文字，只留图标（有更新时那个点仍由 .has-update 控制）。 */
+  .version-badge { padding: 3px 5px; }
+  #version-label { display: none; }
   .update-product { padding: 20px; gap: 14px; }
   .update-detail { grid-template-columns: 1fr; padding: 20px; gap: 18px; }
   .update-detail > div > p { max-width: none; }

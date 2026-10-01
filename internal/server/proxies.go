@@ -26,22 +26,53 @@ import (
 type proxyView struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
+	Kind     string `json:"kind"` // residential | datacenter，空 = 未标注
 	Scheme   string `json:"scheme"`
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
 	Username string `json:"username,omitempty"`
 	HasPass  bool   `json:"has_pass"`
 	Disabled bool   `json:"disabled"`
-	URL      string `json:"url"`      // scheme://host:port，不含凭证
-	Accounts int    `json:"accounts"` // 绑定该代理的账号数
+	URL      string `json:"url"` // scheme://host:port，不含凭证
+	// Instances is how many instances egress through this proxy. Binding now
+	// lives on the instance, so this is the number that decides whether the
+	// proxy can be deleted. Accounts is kept for older clients and stays 0.
+	Instances int `json:"instances"`
+	Accounts  int `json:"accounts"`
 }
 
 func (s *Server) proxyViewOf(p config.Proxy) proxyView {
+	counts := s.instanceProxyCounts()
 	return proxyView{
-		ID: p.ID, Name: p.Name, Scheme: p.Scheme, Host: p.Host, Port: p.Port,
+		ID: p.ID, Name: p.Name, Kind: p.Kind, Scheme: p.Scheme, Host: p.Host, Port: p.Port,
 		Username: p.Username, HasPass: p.Password != "", Disabled: p.Disabled,
-		URL: p.DisplayURL(), Accounts: len(s.cfg.ProxyInUse(p.ID)),
+		URL: p.DisplayURL(), Instances: counts[p.ID],
 	}
+}
+
+// instanceProxyCounts counts instances bound to each proxy. It is the
+// successor to config.ProxyInUse, which counted accounts: egress is now a
+// property of the container rather than of the credentials inside it.
+func (s *Server) instanceProxyCounts() map[string]int {
+	out := map[string]int{}
+	for _, sess := range s.store.All() {
+		if sess.ProxyID != "" {
+			out[sess.ProxyID]++
+		}
+	}
+	return out
+}
+
+// instancesUsingProxy names the instances that would lose their exit IP if the
+// proxy were deleted, so the confirmation dialog can say who is affected.
+func (s *Server) instancesUsingProxy(proxyID string) []string {
+	var out []string
+	for _, sess := range s.store.All() {
+		if sess.ProxyID == proxyID {
+			out = append(out, sess.Name)
+		}
+	}
+	return out
 }
 
 // proxyListView is the list plus the bridge status the section header shows.
@@ -55,6 +86,21 @@ type proxyListView struct {
 
 func (s *Server) handleProxyList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.proxyList(""))
+}
+
+func (s *Server) handleInstanceProxyOptions(w http.ResponseWriter, r *http.Request) {
+	type option struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Kind string `json:"kind"`
+	}
+	out := []option{}
+	for _, proxy := range s.cfg.ProxyList() {
+		if !proxy.Disabled && proxy.Kind == config.ProxyKindResidential {
+			out = append(out, option{ID: proxy.ID, Name: proxy.Name, Kind: proxy.Kind})
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) proxyList(bridgeErr string) proxyListView {
@@ -86,6 +132,7 @@ func newProxyID() string {
 // echo back and therefore submits empty when unchanged.
 type proxyBody struct {
 	Name     *string `json:"name"`
+	Kind     *string `json:"kind"`
 	Scheme   *string `json:"scheme"`
 	Host     *string `json:"host"`
 	Port     *int    `json:"port"`
@@ -106,6 +153,9 @@ func (s *Server) handleProxyCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Name != nil {
 		p.Name = strings.TrimSpace(*body.Name)
+	}
+	if body.Kind != nil {
+		p.Kind = strings.ToLower(strings.TrimSpace(*body.Kind))
 	}
 	if body.Host != nil {
 		p.Host = strings.TrimSpace(*body.Host)
@@ -149,6 +199,10 @@ func (s *Server) handleProxyPatch(w http.ResponseWriter, r *http.Request) {
 		v := strings.TrimSpace(*body.Name)
 		patch.Name = &v
 	}
+	if body.Kind != nil {
+		v := strings.ToLower(strings.TrimSpace(*body.Kind))
+		patch.Kind = &v
+	}
 	if body.Scheme != nil {
 		v := strings.ToLower(strings.TrimSpace(*body.Scheme))
 		patch.Scheme = &v
@@ -180,12 +234,12 @@ func (s *Server) handleProxyDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "proxy not found")
 		return
 	}
-	// 删除会连带解绑账号——那些账号会立刻改走直连（真实出口 IP）。这是明显的
-	// 行为变化，不能顺手做掉，必须让管理员知道自己在解绑谁。
-	if users := s.cfg.ProxyInUse(id); len(users) > 0 && r.URL.Query().Get("force") != "1" {
+	// 删除会连带解绑实例——那些实例会立刻无法启动（绑定代理是强制的）。这是
+	// 明显的行为变化，不能顺手做掉，必须让管理员知道自己在解绑谁。
+	if names := s.instancesUsingProxy(id); len(names) > 0 && r.URL.Query().Get("force") != "1" {
 		writeErr(w, http.StatusConflict,
-			"仍有 "+strconv.Itoa(len(users))+" 个账号绑定该代理（"+strings.Join(users, "、")+
-				"），删除后这些账号将改走服务器直连 IP")
+			"仍有 "+strconv.Itoa(len(names))+" 个实例绑定该代理（"+strings.Join(names, "、")+
+				"），删除后这些实例将无法启动，请在实例里改绑其他代理")
 		return
 	}
 	if err := s.cfg.RemoveProxy(id); err != nil {

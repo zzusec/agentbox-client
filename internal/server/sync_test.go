@@ -21,7 +21,7 @@ func syncTestProject(t *testing.T, s *Server, sess store.Session) store.SyncProj
 	if err := os.Mkdir(filepath.Join(s.workspaceDir(sess), "alpha"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	projects, err := s.store.ReconcileSyncProjects(sess.ID, []string{"alpha"})
+	projects, err := s.store.ReconcileSyncProjects(sess.ID, s.workspaceDir(sess), []string{"alpha"})
 	if err != nil {
 		t.Fatal(err)
 	}

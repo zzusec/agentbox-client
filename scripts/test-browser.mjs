@@ -285,12 +285,14 @@ export async function smoke(page) {
   await screenshot('mobile-about');
   assert.equal(await page.locator('#sec-about').evaluate(el=>el.scrollWidth<=el.clientWidth),true,'mobile update panel overflows');
   await page.locator('#btn-menu').click();
+  await page.screenshot('mobile-menu');
+  // 版本徽章重构后唯一入口在顶栏；抽屉打开时顶栏 inert，必须先关抽屉再点徽章。
+  await page.locator('#btn-sidebar-close').click();
   await page.locator('#version-badge').click();
-  await screenshot('mobile-menu');
+  await screenshot('mobile-version');
   const mobileBounds=await page.locator('#version-menu').boundingBox();
   assert.ok(mobileBounds.x>=0 && mobileBounds.x+mobileBounds.width<=390,'mobile popover outside viewport');
   await page.keyboard.press('Escape');
-  await page.locator('#btn-sidebar-close').click();
   await page.setViewportSize({width:1280,height:900});
   // Reload restores the shared server cache without another upstream check.
   const beforeReload=updateChecks;
@@ -470,7 +472,7 @@ export async function smoke(page) {
   await page.screenshot({path:resolve('output/playwright/transparent-network.png')});
   await page.reload();
   await at('#/tunnel','#view-tunnel');
-  await page.locator('[data-session-id="fixture-space"]').click();
+  await page.locator('.session-card[data-session-id="fixture-space"]').click();
   await at('#/sessions/fixture-space/chat','#tab-chat');
   // Model capabilities: compatible choices survive, incompatible/unknown ones reset.
   await page.setViewportSize({width:1280,height:900});

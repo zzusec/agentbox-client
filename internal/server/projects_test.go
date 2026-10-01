@@ -25,8 +25,11 @@ func TestProjectLifecycleRegistryAndTrash(t *testing.T) {
 	if err := json.Unmarshal(create.Body.Bytes(), &project); err != nil {
 		t.Fatal(err)
 	}
-	if project.ID == "" || project.Path != "/workspace/alpha" {
-		t.Fatalf("project = %+v", project)
+	// The project path is the absolute host path, which is also the path
+	// inside the container — that identity is the whole point of v11.
+	wantPath := filepath.Join(s.workspaceDir(sess), "alpha")
+	if project.ID == "" || project.Path != wantPath {
+		t.Fatalf("project = %+v want path %q", project, wantPath)
 	}
 
 	list := httptest.NewRecorder()

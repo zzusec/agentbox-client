@@ -28,21 +28,29 @@ func (e localGitExecutor) ExecCommand(ctx context.Context, containerID string, a
 	// The fixture uses host Git, so omit the Linux-only timeout wrapper.
 	args := append([]string(nil), argv[4:]...)
 	for i, arg := range args {
-		if arg == "/workspace" || strings.HasPrefix(arg, "/workspace/") {
-			args[i] = e.workspace + strings.TrimPrefix(arg, "/workspace")
-		} else if strings.HasPrefix(arg, "GIT_CEILING_DIRECTORIES=") {
+		if strings.HasPrefix(arg, "GIT_CEILING_DIRECTORIES=") {
 			dir := strings.TrimPrefix(arg, "GIT_CEILING_DIRECTORIES=")
-			if dir == "/" {
-				dir = filepath.Dir(e.workspace)
-			} else {
-				dir = e.workspace + strings.TrimPrefix(dir, "/workspace")
-			}
-			args[i] = "GIT_CEILING_DIRECTORIES=" + dir
+			args[i] = "GIT_CEILING_DIRECTORIES=" + e.mapPath(dir)
+			continue
 		}
+		args[i] = e.mapPath(arg)
 	}
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	returnBytes, err := cmd.Output()
 	return string(returnBytes), err
+}
+
+// mapPath rewrites a container path onto the fixture. The workspace is now
+// addressed by its host path, which is either already correct or still spelled
+// /workspace by an older caller; both have to land on the same directory.
+func (e localGitExecutor) mapPath(p string) string {
+	if strings.HasPrefix(p, e.workspace) {
+		return p
+	}
+	if p == "/workspace" || strings.HasPrefix(p, "/workspace/") {
+		return e.workspace + strings.TrimPrefix(p, "/workspace")
+	}
+	return p
 }
 
 func newGitTestServer(t *testing.T) (*Server, store.Session) {

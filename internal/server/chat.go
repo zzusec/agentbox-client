@@ -19,7 +19,6 @@ import (
 
 	"agentbox/internal/agent"
 	"agentbox/internal/config"
-	"agentbox/internal/dockerx"
 	"agentbox/internal/store"
 )
 
@@ -507,7 +506,7 @@ func (r *chatRoom) execTurn(ctx context.Context, sess store.Session, cmd []strin
 	if err != nil {
 		return err
 	}
-	stream, err := s.dock.ExecStream(ctx, sess.ContainerID, cmd, env)
+	stream, err := s.dock.ExecStream(ctx, sess.ContainerID, cmd, env, s.containerWorkspace(ctx, sess))
 	if err != nil {
 		return errors.New("exec失败: " + err.Error())
 	}
@@ -557,7 +556,7 @@ func (r *chatRoom) appServerTurn(ctx context.Context, sess store.Session, text, 
 	if err != nil {
 		return false, err
 	}
-	stream, err := s.dock.ExecStream(ctx, sess.ContainerID, agent.AppServerCommand(), env)
+	stream, err := s.dock.ExecStream(ctx, sess.ContainerID, agent.AppServerCommand(), env, s.containerWorkspace(ctx, sess))
 	if err != nil {
 		return false, errors.New("exec失败: " + err.Error())
 	}
@@ -585,7 +584,7 @@ func (r *chatRoom) appServerTurn(ctx context.Context, sess store.Session, text, 
 	err = agent.RunCodexTurn(ctx, stream, pr,
 		func() { _ = stream.CloseWrite() }, // 硬断兜底：app-server 随 stdin EOF 退出
 		ich,
-		agent.CodexTurn{Prompt: text, ThreadID: sess.ChatSession, Model: model, Effort: effort, Cwd: dockerx.WorkspaceMount, RejectInheritedEffort: len(unsupported) > 0 && unsupported[0]},
+		agent.CodexTurn{Prompt: text, ThreadID: sess.ChatSession, Model: model, Effort: effort, Cwd: s.containerWorkspace(ctx, sess), RejectInheritedEffort: len(unsupported) > 0 && unsupported[0]},
 		onLine)
 	if err != nil {
 		if errors.Is(err, agent.ErrAppServerUnavailable) {

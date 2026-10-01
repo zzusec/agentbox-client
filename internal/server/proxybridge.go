@@ -1,4 +1,4 @@
-// 账号出口代理的容器侧桥接。
+// 实例出口代理的容器侧桥接。
 //
 // 代理池里绝大多数是 SOCKS5，而容器里跑的两个 CLI 只有一个认它：codex 是 Rust
 // reqwest，认 socks5://；claude 是 Node/undici，HTTPS_PROXY 只认 http(s)://，
@@ -7,9 +7,12 @@
 // 协议，socks5 那一段由服务端自己走（proxydial.go）。
 //
 // 谁能用哪个上游，由代理认证决定：注入容器的 URL 形如
-// http://<账号ID>:<密钥>@172.17.0.1:1081，桥接按用户名查账号绑定的代理。密钥是
-// 服务端 auth_token 对账号 ID 的 HMAC，不落盘也不用同步；没有它，同一台机器上
-// 任何一个容器都能白嫖别人账号的出口 IP。
+// http://<实例ID>:<密钥>@172.17.0.1:1081，桥接按用户名查实例绑定的代理。密钥是
+// 服务端 auth_token 对实例 ID 的 HMAC，不落盘也不用同步；没有它，同一台机器上
+// 任何一个容器都能白嫖别人实例的出口 IP。
+//
+// 出口代理绑在实例上（一个实例只能且必须绑一个），不再从账号继承：容器是出口 IP
+// 的归属单位，账号只是里面的凭证。
 package server
 
 import (
@@ -18,6 +21,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -49,18 +53,27 @@ var proxyEnvNames = []string{
 // forgotten call away from leaking.
 //
 // A bound-but-unusable proxy still gets the env. Injecting nothing would route
-// the account's official requests out of the server's real IP, which is the
+// the instance's official requests out of the server's real IP, which is the
 // failure this feature exists to prevent; a hard error is the safer symptom.
-func (s *Server) proxyEnvList(sess store.Session) []string {
-	if _, bound := s.cfg.AccountProxy(sess.AccountID); !bound {
-		return nil
+//
+// The identity in the URL is the instance, not the account: egress belongs to
+// the container, and one container can carry two accounts.
+func (s *Server) proxyEnvList(sess store.Session) ([]string, error) {
+	_, err := s.instanceProxy(sess)
+	if err != nil {
+		if errors.Is(err, errNoInstanceProxy) {
+			// Operator explicitly allowed proxy-less instances.
+			log.Printf("instance %s: 未绑定出口代理，按配置放行直连", sess.ID)
+			return nil, nil
+		}
+		return nil, err
 	}
 	pb := s.cfg.GetProxyBridge()
 	host := pb.Host
-	if host == "" {
-		return nil // 无法拼出容器可达的地址，注入了也只会全面失败
+	if host == "" || portOf(pb.Bind) == "" {
+		return nil, fmt.Errorf("%w: 实例出口代理桥接地址未配置", errInstanceProxy)
 	}
-	url := fmt.Sprintf("http://%s:%s@%s", sess.AccountID, s.proxySecret(sess.AccountID),
+	url := fmt.Sprintf("http://%s:%s@%s", sess.ID, s.proxySecret(sess.ID),
 		net.JoinHostPort(host, portOf(pb.Bind)))
 	// 本机与网桥网关本身不走代理：隧道的 SOCKS 端口和端口映射都挂在网关上，
 	// 绕一圈回代理只会自环。
@@ -68,7 +81,7 @@ func (s *Server) proxyEnvList(sess store.Session) []string {
 	return []string{
 		"HTTP_PROXY=" + url, "HTTPS_PROXY=" + url, "ALL_PROXY=" + url, "NO_PROXY=" + noProxy,
 		"http_proxy=" + url, "https_proxy=" + url, "all_proxy=" + url, "no_proxy=" + noProxy,
-	}
+	}, nil
 }
 
 // proxySecret derives an account's bridge password from the server auth token.
@@ -160,7 +173,16 @@ func (s *Server) serveProxyBridge(w http.ResponseWriter, r *http.Request) {
 	s.bridgeForward(w, r, p)
 }
 
-// bridgeAuth resolves the calling account from Proxy-Authorization and returns
+// Proxy env now carries the instance id: egress is a property of the
+// container, not of the credentials inside it. Containers started before the
+// change still present their account id, so keep accepting those until they
+// have been recreated — a container is only recreated on stop, and refusing
+// mid-session would break a running agent for no reason.
+//
+// TODO(v12): drop this and the account fallback below.
+const legacyAccountBridge = true
+
+// bridgeAuth resolves the calling instance from Proxy-Authorization and returns
 // the proxy it is bound to. Anything unresolvable is answered here.
 func (s *Server) bridgeAuth(w http.ResponseWriter, r *http.Request) (config.Proxy, bool) {
 	user, pass, ok := parseProxyAuth(r.Header.Get("Proxy-Authorization"))
@@ -169,29 +191,78 @@ func (s *Server) bridgeAuth(w http.ResponseWriter, r *http.Request) (config.Prox
 		http.Error(w, "proxy authentication required", http.StatusProxyAuthRequired)
 		return config.Proxy{}, false
 	}
-	acct, found := s.cfg.Account(user)
-	// Compare regardless of whether the account exists, and only then branch, so
-	// the reply time does not tell an unknown id from a wrong secret.
+	var sess store.Session
+	found := false
+	if s.store != nil {
+		sess, found = s.store.Get(user)
+	}
+	// Compare regardless of whether the id exists, and only then branch, so the
+	// reply time does not tell an unknown id from a wrong secret.
 	want := s.proxySecret(user)
 	match := subtle.ConstantTimeCompare([]byte(pass), []byte(want)) == 1
-	if !found || !match {
+	if !match {
 		w.Header().Set("Proxy-Authenticate", `Basic realm="agentbox"`)
 		http.Error(w, "proxy authentication failed", http.StatusProxyAuthRequired)
 		return config.Proxy{}, false
 	}
-	p, bound := s.cfg.AccountProxy(acct.ID)
-	if !bound {
-		// The env is injected per exec; an admin can unbind mid-session and the
-		// container keeps using the old env until its next exec.
-		http.Error(w, "agentbox: 该账号未绑定 IP 代理", http.StatusBadGateway)
-		return config.Proxy{}, false
+	if found {
+		return s.instanceProxyOrReject(w, sess)
 	}
-	if p.Disabled || !config.ValidProxyScheme(p.Scheme) {
-		http.Error(w, "agentbox: 账号绑定的 IP 代理已停用或配置无效", http.StatusBadGateway)
+	if legacyAccountBridge {
+		if acct, ok := s.cfg.Account(user); ok {
+			if p, bound := s.cfg.AccountProxy(acct.ID); bound {
+				if p.Disabled || !config.ValidProxyScheme(p.Scheme) {
+					http.Error(w, "agentbox: 账号绑定的 IP 代理已停用或配置无效", http.StatusBadGateway)
+					return config.Proxy{}, false
+				}
+				return p, true
+			}
+		}
+	}
+	w.Header().Set("Proxy-Authenticate", `Basic realm="agentbox"`)
+	http.Error(w, "proxy authentication failed", http.StatusProxyAuthRequired)
+	return config.Proxy{}, false
+}
+
+// instanceProxyOrReject answers the bridge with the instance's proxy, or with a
+// clear failure. It never falls back to a direct connection: routing around the
+// proxy is exactly what binding one was meant to prevent.
+func (s *Server) instanceProxyOrReject(w http.ResponseWriter, sess store.Session) (config.Proxy, bool) {
+	p, err := s.instanceProxy(sess)
+	if err != nil {
+		http.Error(w, "agentbox: "+err.Error(), http.StatusBadGateway)
 		return config.Proxy{}, false
 	}
 	return p, true
 }
+
+// instanceProxy returns the outbound proxy an instance must use.
+func (s *Server) instanceProxy(sess store.Session) (config.Proxy, error) {
+	if sess.ProxyID == "" {
+		if !s.cfg.RequireInstanceProxy() {
+			return config.Proxy{}, errNoInstanceProxy
+		}
+		return config.Proxy{}, fmt.Errorf("%w: 实例未绑定住宅代理，请在实例里指定出口代理后重试", errInstanceProxy)
+	}
+	p, ok := s.cfg.Proxy(sess.ProxyID)
+	if !ok || !config.ValidProxyScheme(p.Scheme) {
+		return config.Proxy{}, fmt.Errorf("%w: 实例绑定的出口代理配置无效", errInstanceProxy)
+	}
+	if p.Kind == config.ProxyKindDatacenter {
+		return config.Proxy{}, fmt.Errorf("%w: 实例只能绑定住宅代理", errInstanceProxy)
+	}
+	if p.Disabled {
+		return config.Proxy{}, fmt.Errorf("%w: 实例绑定的出口代理已停用", errInstanceProxy)
+	}
+	return p, nil
+}
+
+// errNoInstanceProxy means "no proxy bound, and the operator has chosen to
+// allow that". Callers treat it as "inject nothing", i.e. the pre-v11
+// behaviour, rather than as a failure.
+var errNoInstanceProxy = errors.New("instance has no proxy bound")
+
+var errInstanceProxy = errors.New("instance proxy unavailable")
 
 // bridgeConnect splices the client socket to an upstream tunnel.
 func (s *Server) bridgeConnect(w http.ResponseWriter, r *http.Request, p config.Proxy) {

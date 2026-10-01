@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"agentbox/internal/config"
+	"agentbox/internal/dockerx"
 	"agentbox/internal/store"
 )
 
@@ -20,12 +21,28 @@ type fakeRuntime struct {
 	fail                   error
 	entered                chan struct{}
 	proceed                chan struct{}
+	legacyMounts           bool
 }
 
-func (f *fakeRuntime) RunningWithMount(context.Context, string, string) bool {
+func (f *fakeRuntime) RunningWithMount(_ context.Context, _, dest string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.legacyMounts && dest != dockerx.WorkspaceMount && dest != dockerx.SharedMount {
+		return false
+	}
 	return f.running
+}
+
+func TestStartPreservesLegacyContainer(t *testing.T) {
+	service, runtime, sess := fixture(t)
+	runtime.legacyMounts = true
+	got, err := service.Start(t.Context(), sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ContainerID != sess.ContainerID || runtime.starts != 0 || runtime.stops != 0 || runtime.removes != 0 {
+		t.Fatalf("legacy container was changed: %+v, %+v", got, runtime)
+	}
 }
 func (f *fakeRuntime) EnsureRunning(ctx context.Context, _ store.Session, _ config.Account, _, _, _ string) (string, error) {
 	if f.entered != nil {
@@ -75,8 +92,8 @@ func fixture(t *testing.T) (*Service, *fakeRuntime, store.Session) {
 		t.Fatal(err)
 	}
 	runtime := &fakeRuntime{running: true}
-	service := New(&config.Config{DataDir: root}, st, runtime, func(store.Session) (config.Account, error) {
-		return config.Account{ID: "acct", Type: config.AgentCodex}, nil
+	service := New(&config.Config{DataDir: root}, st, runtime, func(store.Session) ([]AccountBinding, error) {
+		return []AccountBinding{{Agent: config.AgentCodex, Account: config.Account{ID: "acct", Type: config.AgentCodex}}}, nil
 	}, func(context.Context, config.Account, store.Session) error { return nil })
 	return service, runtime, sess
 }

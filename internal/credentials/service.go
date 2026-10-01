@@ -82,7 +82,7 @@ func (s *Service) Sync(ctx context.Context, acct config.Account, sess store.Sess
 		return err
 	}
 	defer release()
-	if sess.AccountID != acct.ID {
+	if sess.AccountForTool(acct.Type) != acct.ID {
 		return fmt.Errorf("credential account does not match session")
 	}
 	s.syncRotatingCred(acct, sess)
@@ -120,7 +120,7 @@ func (s *Service) broadcast(acct config.Account) {
 	}
 	for _, sess := range s.sessions.All() {
 		current, ok = s.cfg.Account(acct.ID)
-		if !ok || sess.AccountID != acct.ID || !s.allowed(current, sess.User) {
+		if !ok || sess.AccountForTool(current.Type) != acct.ID || !s.allowed(current, sess.User) {
 			continue
 		}
 		home, err := s.openHome(sess)

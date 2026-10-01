@@ -123,6 +123,10 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 		"docker_version":   s.dock.ServerVersion(r.Context()),
 		"sessions_total":   total,
 		"sessions_running": running,
+		// 「实例」是同一批行的新名字；两个字段都存在，旧客户端读 sessions_*，
+		// 新界面读 instances_*，值永远一致。
+		"instances_total":   total,
+		"instances_running": running,
 		"accounts":         len(s.cfg.AccountList()),
 		"users":            s.store.CountUsers(),
 		"started_at":       s.startedAt.UnixMilli(),

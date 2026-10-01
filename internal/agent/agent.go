@@ -192,15 +192,63 @@ func InterruptCommand() []string {
 
 // claudeSeedState pre-accepts first-run dialogs so both headless and
 // interactive modes work immediately in a fresh session home.
-var claudeSeedState = map[string]any{
-	"hasCompletedOnboarding":        true,
-	"bypassPermissionsModeAccepted": true,
-	"projects": map[string]any{
-		"/workspace": map[string]any{
+//
+// Both /workspace and the host-absolute workspace path are trusted: the
+// container mounts the workspace at both, and an instance started from one path
+// but resumed from the other would otherwise hit the trust dialog again.
+func claudeSeedState(workspacePath string) map[string]any {
+	trust := func() map[string]any {
+		return map[string]any{
 			"hasTrustDialogAccepted":        true,
 			"hasCompletedProjectOnboarding": true,
-		},
-	},
+		}
+	}
+	projects := map[string]any{"/workspace": trust()}
+	if workspacePath != "" && workspacePath != "/workspace" {
+		projects[workspacePath] = trust()
+	}
+	return map[string]any{
+		"hasCompletedOnboarding":        true,
+		"bypassPermissionsModeAccepted": true,
+		"projects":                      projects,
+	}
+}
+
+// mergeClaudeSeedProjects adds missing trust entries to an existing
+// .claude.json. Homes seeded before the workspace gained a host-absolute path
+// only carry /workspace; rewriting the file would discard whatever the CLI has
+// stored since, so new keys are merged in instead.
+func mergeClaudeSeedProjects(raw []byte, workspacePath string) ([]byte, bool) {
+	var state map[string]any
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return nil, false
+	}
+	projects, ok := state["projects"].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	trust := map[string]any{
+		"hasTrustDialogAccepted":        true,
+		"hasCompletedProjectOnboarding": true,
+	}
+	changed := false
+	for _, key := range []string{"/workspace", workspacePath} {
+		if key == "" {
+			continue
+		}
+		if _, exists := projects[key]; !exists {
+			projects[key] = trust
+			changed = true
+		}
+	}
+	if !changed {
+		return nil, false
+	}
+	out, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // RotatingCredFile returns the OAuth credential file that the agent CLI
@@ -217,10 +265,41 @@ func RotatingCredFile(agentType string) (poolName, homeRel string) {
 	}
 }
 
+// AccountSeed is one account whose credentials should be present in a session
+// home. An instance bound to both a claude and a codex account passes two.
+type AccountSeed struct {
+	AgentType string // config.AgentClaude | config.AgentCodex
+	CredDir   string
+}
+
 // SeedCredentials refreshes account credentials inside the session home
 // directory. It is called on every session start so re-logins on the pool
 // account propagate to existing sessions.
-func SeedCredentials(agentType, homeDir, credDir string, uid, gid int) error {
+//
+// Seeds are independent: .claude and .codex sit side by side, so an instance
+// can carry credentials for both tools at once and pick between them per
+// project. An empty seed list is an error — a container with no credentials
+// would fail later and far more obscurely.
+func SeedCredentials(homeDir string, seeds []AccountSeed, uid, gid int) error {
+	return SeedCredentialsIn(homeDir, seeds, "", uid, gid)
+}
+
+// SeedCredentialsIn is SeedCredentials with the host-absolute workspace path,
+// which is recorded as an additional trusted project directory for claude.
+func SeedCredentialsIn(homeDir string, seeds []AccountSeed, workspacePath string, uid, gid int) error {
+	if len(seeds) == 0 {
+		return fmt.Errorf("no account bound to the instance")
+	}
+	for _, seed := range seeds {
+		if err := seedOne(seed, homeDir, workspacePath, uid, gid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func seedOne(seed AccountSeed, homeDir, workspacePath string, uid, gid int) error {
+	agentType := seed.AgentType
 	var target string
 	switch agentType {
 	case config.AgentClaude:
@@ -230,6 +309,7 @@ func SeedCredentials(agentType, homeDir, credDir string, uid, gid int) error {
 	default:
 		return fmt.Errorf("unknown agent type %q", agentType)
 	}
+	credDir := seed.CredDir
 	root, err := openHome(homeDir)
 	if err != nil {
 		return err
@@ -264,13 +344,27 @@ func SeedCredentials(agentType, homeDir, credDir string, uid, gid int) error {
 
 	if agentType == config.AgentClaude {
 		stateFile := ".claude.json"
-		if _, err := root.Lstat(stateFile); os.IsNotExist(err) {
-			raw, err := json.MarshalIndent(claudeSeedState, "", "  ")
+		_, statErr := root.Lstat(stateFile)
+		switch {
+		case os.IsNotExist(statErr):
+			raw, err := json.MarshalIndent(claudeSeedState(workspacePath), "", "  ")
 			if err != nil {
 				return err
 			}
 			if err := writeOwned(root, stateFile, raw, uid, gid); err != nil {
 				return err
+			}
+		case statErr == nil:
+			// Already seeded, possibly before the workspace had an absolute
+			// path. Add the missing trust key rather than rewriting the file.
+			existing, err := root.ReadFile(stateFile, 4<<20)
+			if err != nil {
+				break
+			}
+			if merged, changed := mergeClaudeSeedProjects(existing, workspacePath); changed {
+				if err := writeOwned(root, stateFile, merged, uid, gid); err != nil {
+					return err
+				}
 			}
 		}
 		if err := seedClaudeHUD(homeDir, uid, gid); err != nil {

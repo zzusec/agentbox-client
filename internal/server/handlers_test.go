@@ -22,6 +22,12 @@ import (
 func newTestServer(t *testing.T) (*Server, store.Session) {
 	t.Helper()
 	dataDir := t.TempDir()
+	// macOS hands out /var/folders/... which is a symlink; git compares the
+	// resolved path, so an unresolved GIT_CEILING_DIRECTORIES would silently
+	// stop protecting the workspace from upward repository discovery.
+	if resolved, err := filepath.EvalSymlinks(dataDir); err == nil {
+		dataDir = resolved
+	}
 	st, err := store.Open(filepath.Join(dataDir, "state.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +157,7 @@ func TestHandleUploadToProjectReturnsContainerPath(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if out["path"] != "alpha/note.txt" || out["container_path"] != "/workspace/alpha/note.txt" {
+	if out["path"] != "alpha/note.txt" || out["container_path"] != filepath.Join(s.workspaceDir(sess), "alpha", "note.txt") {
 		t.Fatalf("response = %#v", out)
 	}
 	if raw, err := os.ReadFile(filepath.Join(s.workspaceDir(sess), "alpha", "note.txt")); err != nil || string(raw) != "hello" {

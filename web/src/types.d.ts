@@ -8,15 +8,33 @@
 
 /* ---------------- 会话 / 账号 ---------------- */
 
-/** GET /api/sessions、POST /api/sessions 等的会话视图（server.sessionView）。 */
+/** GET /api/sessions、POST /api/sessions 等的实例视图（server.sessionView）。
+ *
+ * 一个实例 = 一个容器 + 一套工作区，可以同时绑一个 Claude 账号和一个 Codex
+ * 账号；出口代理绑在实例上（必填），不再从账号继承。`account_id` / `agent` /
+ * `account_label` 是实例化之前的旧字段，服务端仍原样下发，值为「默认工具对应的
+ * 那一侧」，旧客户端和旧书签都靠它继续工作。 */
 export interface Session {
   id: string;
   user: string;
   name: string;
   /** "claude" | "codex"，服务端不保证只有这两个值，故留 string */
   agent: string;
+  /** 旧字段：默认工具对应的账号 id */
   account_id: string;
-  /** 创建空间时保存的默认模型。 */
+  /** 绑定的 Claude 账号 id；未绑定为空串 */
+  claude_account_id?: string;
+  /** 绑定的 Codex 账号 id；未绑定为空串 */
+  codex_account_id?: string;
+  /** 默认开发工具，与 agent 同值，用实例语义的名字再给一份 */
+  default_agent?: string;
+  /** 实例的出口代理 id（必填；未回填的历史实例可能为空） */
+  proxy_id?: string;
+  /** 出口代理展示名 */
+  proxy_label?: string;
+  /** 实例工作区的服务器绝对路径；容器按同一路径挂载，不是本机目录 */
+  workspace_path?: string;
+  /** 创建实例时保存的默认模型。 */
   default_model: string;
   container_id?: string;
   status: string;
@@ -25,16 +43,64 @@ export interface Session {
   stop_reason?: string;
   created_at: string;
   updated_at: string;
-  /** sessionView 在 store.Session 之上补的账号展示名 */
+  /** 旧字段：默认工具账号的展示名 */
   account_label: string;
+  claude_account_label?: string;
+  codex_account_label?: string;
 }
 
 export interface Project {
   id: string;
   name: string;
+  /** "claude" | "codex" | ""（空 = 跟随实例默认工具） */
+  agent?: string;
+  /** 服务器绝对路径（宿主机 = 容器内同一路径），不是 Mac 本机目录 */
   path: string;
   created_at: string;
   updated_at: string;
+}
+
+/** GET /api/instances/proxies 的一行：普通用户建实例时可选的出口。
+ * 刻意只有 id/name/kind —— 代理地址、用户名、密码都不下发。 */
+export interface InstanceProxyOption {
+  id: string;
+  name: string;
+  /** "residential" | "datacenter" | ""（空 = 未标注的历史代理） */
+  kind: string;
+}
+
+/** GET /api/instances/stats 的一行：实例的真实资源读数。
+ * CPU 是两次采样的差值，window_ms=0 表示还没有可做差的上一帧；磁盘靠宿主机
+ * 目录遍历，disk_stale=true 表示这一帧还没算出来（不是 0）。 */
+export interface InstanceStat {
+  sample_ok?: boolean;
+  cpu_ready?: boolean;
+  session_id: string;
+  name: string;
+  agent: string;
+  running: boolean;
+  /** 实例是否绑定了可用出口代理；false 时实例无法启动 */
+  proxy_bound: boolean;
+  /** 单核百分比，可超过 100；window_ms=0 时无意义 */
+  cpu_percent: number;
+  mem_usage: number;
+  mem_limit: number;
+  pids: number;
+  disk_bytes: number;
+  disk_stale: boolean;
+  /** 累计收发字节（不是速率），速率由前端用相邻两帧自己求差 */
+  net_rx_bytes: number;
+  net_tx_bytes: number;
+  /** 容器本次启动时间(ms)，0 = 未运行/未知 */
+  started_at: number;
+}
+
+export interface InstanceStats {
+  /** 服务端当前时间(ms) */
+  now: number;
+  /** 采样窗口(ms)，0 = 首帧，速率类指标还没有上一帧可做差 */
+  window_ms: number;
+  items: InstanceStat[];
 }
 
 export interface AccountAccess {

@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode"
 
+	"agentbox/internal/config"
 	"agentbox/internal/dockerx"
 	"agentbox/internal/store"
 	"github.com/gorilla/websocket"
@@ -36,21 +37,27 @@ func (s *Server) browserEnv(sess store.Session) ([]string, string, error) {
 		return nil, "", err
 	}
 	env := []string{}
-	p, bound := s.cfg.AccountProxy(sess.AccountID)
-	if bound {
-		if p.Disabled {
-			return nil, "", errors.New("账号出口代理已停用")
+	// Egress belongs to the instance now, not to the account.
+	var p config.Proxy
+	bound := false
+	if got, err := s.instanceProxy(sess); err == nil {
+		p, bound = got, true
+		vars, err := s.proxyEnvList(sess)
+		if err != nil {
+			return nil, "", err
 		}
 		var proxy string
-		for _, kv := range s.proxyEnvList(sess) {
+		for _, kv := range vars {
 			if strings.HasPrefix(kv, "HTTP_PROXY=") {
 				proxy = strings.TrimPrefix(kv, "HTTP_PROXY=")
 			}
 		}
 		if proxy == "" || !s.bridgeUp.Load() {
-			return nil, "", errors.New("账号出口代理尚未就绪")
+			return nil, "", errors.New("实例出口代理尚未就绪")
 		}
 		env = append(env, "AGENTBOX_BROWSER_PROXY="+proxy)
+	} else if !errors.Is(err, errNoInstanceProxy) {
+		return nil, "", err
 	}
 	raw, _ := json.Marshal(struct {
 		Proxy any
@@ -154,7 +161,7 @@ func (s *Server) handleBrowserWS(w http.ResponseWriter, r *http.Request, sess st
 		if !state.Running || state.NetworkKey != networkKey {
 			return errors.New("请重新启动浏览器以应用当前网络设置")
 		}
-		stream, err = s.dock.ExecStream(ctx, cur.ContainerID, []string{"python3", "-I", "/opt/agentbox/browser.py", "relay"}, nil)
+		stream, err = s.dock.ExecStream(ctx, cur.ContainerID, []string{"python3", "-I", "/opt/agentbox/browser.py", "relay"}, nil, "")
 		return err
 	})
 	if err != nil {

@@ -205,7 +205,7 @@ func (s *Service) syncAcctCreds(acct config.Account) {
 		return
 	}
 	for _, sess := range s.sessions.All() {
-		if sess.AccountID == acct.ID {
+		if sess.AccountForTool(acct.Type) == acct.ID {
 			s.syncRotatingCred(acct, sess)
 		}
 	}

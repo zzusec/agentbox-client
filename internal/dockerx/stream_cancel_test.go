@@ -45,14 +45,14 @@ func TestExecConnectionsCloseOnCancellation(t *testing.T) {
 			defer cancel()
 			readDone := make(chan struct{})
 			if pty {
-				stream, err := m.ExecPTY(ctx, "box", []string{"sleep", "infinity"}, nil)
+				stream, err := m.ExecPTY(ctx, "box", []string{"sleep", "infinity"}, nil, "")
 				if err != nil {
 					t.Fatal(err)
 				}
 				defer stream.Close()
 				go func() { defer close(readDone); io.Copy(io.Discard, stream.Reader) }()
 			} else {
-				stream, err := m.ExecStream(ctx, "box", []string{"sleep", "infinity"}, nil)
+				stream, err := m.ExecStream(ctx, "box", []string{"sleep", "infinity"}, nil, "")
 				if err != nil {
 					t.Fatal(err)
 				}

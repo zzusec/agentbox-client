@@ -124,6 +124,8 @@ type RawStat struct {
 	MemUsage uint64    // resident memory minus reclaimable file cache, bytes
 	MemLimit uint64    // container memory limit, bytes (host total when unlimited)
 	Pids     uint64    // processes currently in the cgroup
+	NetRx    uint64    // summed interface rx_bytes, cumulative; needs two frames
+	NetTx    uint64    // summed interface tx_bytes, cumulative; needs two frames
 	Read     time.Time // daemon-side read timestamp, the window's true clock
 	OK       bool      // false when the snapshot could not be taken
 }
@@ -140,11 +142,18 @@ func (m *Manager) statSnapshot(ctx context.Context, containerID string) RawStat 
 	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
 		return RawStat{}
 	}
+	var netRx, netTx uint64
+	for _, n := range s.Networks {
+		netRx += n.RxBytes
+		netTx += n.TxBytes
+	}
 	return RawStat{
 		CPUTotal: s.CPUStats.CPUUsage.TotalUsage,
 		MemUsage: memUsage(s.MemoryStats),
 		MemLimit: s.MemoryStats.Limit,
 		Pids:     s.PidsStats.Current,
+		NetRx:    netRx,
+		NetTx:    netTx,
 		Read:     s.Read,
 		OK:       true,
 	}
@@ -265,39 +274,34 @@ func (m *Manager) EnsureRunning(ctx context.Context, sess store.Session, acct co
 		}
 		if err == nil {
 			hasShared := false
+			hasWorkspace := false
 			for _, mnt := range info.Mounts {
-				if mnt.Destination == SharedMount {
+				switch mnt.Destination {
+				case SharedMount:
 					hasShared = true
-					break
+				case workspaceDir, WorkspaceMount:
+					hasWorkspace = true
 				}
 			}
-			// 镜像 tag 被重建后，旧容器仍指向旧镜像层；停着的容器直接换新。
-			imageFresh := true
-			// 老版本把账号 env 烘进了容器，那样的容器摘不掉密钥，只能重建。
 			envFresh := true
 			if img, ierr := m.cli.ImageInspect(ctx, m.cfg.GetAgentImage()); ierr == nil {
-				imageFresh = info.Image == img.ID
 				if info.Config != nil {
 					envFresh = !hasBakedEnv(info.Config.Env, img.Config.Env)
 				}
 			}
-			if hasShared && envFresh {
+			if hasShared && hasWorkspace && envFresh {
 				if info.State != nil && info.State.Running {
 					return sess.ContainerID, nil // 运行中不打断，停一次后吃到新镜像
 				}
-				if imageFresh {
-					if err := m.cli.ContainerStart(ctx, sess.ContainerID, container.StartOptions{}); err == nil {
-						return sess.ContainerID, nil
-					}
+				if err := m.cli.ContainerStart(ctx, sess.ContainerID, container.StartOptions{}); err != nil {
+					return "", err
 				}
+				return sess.ContainerID, nil
 			}
-			// Unstartable leftover, a pre-/shared container, or a stale image:
-			// replace it (workspace/home live on the host, so recreation loses
-			// nothing).
-			if err := m.removeNetwork(ctx, sess.ContainerID); err != nil {
-				return "", err
-			}
-			_ = m.cli.ContainerRemove(ctx, sess.ContainerID, container.RemoveOptions{Force: true})
+			return "", fmt.Errorf("existing container %s requires an explicit migration; automatic recreation is disabled", sess.ContainerID)
+		}
+		if err != nil && !client.IsErrNotFound(err) {
+			return "", err
 		}
 	}
 
@@ -318,8 +322,16 @@ func (m *Manager) EnsureRunning(ctx context.Context, sess store.Session, acct co
 		},
 	}
 	hc := &container.HostConfig{
+		// The workspace is mounted twice on purpose: at /workspace for the
+		// historical contract (the agent image, the browser image's download
+		// directory and the seeded trust entry all name /workspace) and at the
+		// host's own absolute path, which is what the UI and the terminal report.
+		// A path printed inside the container is therefore valid on the host, which
+		// is what "local and server paths match" needs; dropping /workspace would
+		// silently break the images.
 		Binds: []string{
 			workspaceDir + ":" + WorkspaceMount,
+			workspaceDir + ":" + workspaceDir,
 			homeDir + ":" + ContainerHome,
 			sharedDir + ":" + SharedMount,
 		},
@@ -394,17 +406,27 @@ type PTY struct {
 
 func (p *PTY) Close() { p.closer() }
 
+// execWorkDir resolves the working directory for an exec. An empty value means
+// "the caller did not pick one", in which case /workspace stays the answer: it
+// is still mounted and still valid, it just is not the path the UI advertises.
+func execWorkDir(workDir string) string {
+	if workDir == "" {
+		return WorkspaceMount
+	}
+	return workDir
+}
+
 // extraEnv carries per-account variables (e.g. ANTHROPIC_BASE_URL): container
 // env is frozen at creation, so exec-time injection is what makes account env
 // edits reach containers that already exist.
-func (m *Manager) ExecPTY(ctx context.Context, containerID string, cmd []string, extraEnv []string) (*PTY, error) {
+func (m *Manager) ExecPTY(ctx context.Context, containerID string, cmd []string, extraEnv []string, workDir string) (*PTY, error) {
 	idResp, err := m.cli.ContainerExecCreate(ctx, containerID, container.ExecOptions{
 		User:         execUser,
 		Tty:          true,
 		AttachStdin:  true,
 		AttachStdout: true,
 		AttachStderr: true,
-		WorkingDir:   WorkspaceMount,
+		WorkingDir:   execWorkDir(workDir),
 		// DISABLE_AUTOUPDATER also lives in the image ENV and container env,
 		// but containers created from older images have neither; exec env is
 		// the only knob that reaches those without recreating them.
@@ -434,13 +456,13 @@ type Stream struct {
 	closer func()
 }
 
-func (m *Manager) ExecStream(ctx context.Context, containerID string, cmd []string, extraEnv []string) (*Stream, error) {
+func (m *Manager) ExecStream(ctx context.Context, containerID string, cmd []string, extraEnv []string, workDir string) (*Stream, error) {
 	idResp, err := m.cli.ContainerExecCreate(ctx, containerID, container.ExecOptions{
 		User:         execUser,
 		AttachStdin:  true,
 		AttachStdout: true,
 		AttachStderr: true,
-		WorkingDir:   WorkspaceMount,
+		WorkingDir:   execWorkDir(workDir),
 		Env:          append([]string{"DISABLE_AUTOUPDATER=1"}, extraEnv...),
 		Cmd:          cmd,
 	})
@@ -498,7 +520,7 @@ func (m *Manager) ExitCode(ctx context.Context, execID string) (int, error) {
 // thread-title generation — not for long agent turns. Output is capped so a
 // misbehaving command can't balloon memory.
 func (m *Manager) ExecCapture(ctx context.Context, containerID string, cmd, extraEnv []string, stdin string) (string, error) {
-	stream, err := m.ExecStream(ctx, containerID, cmd, extraEnv)
+	stream, err := m.ExecStream(ctx, containerID, cmd, extraEnv, "")
 	if err != nil {
 		return "", err
 	}

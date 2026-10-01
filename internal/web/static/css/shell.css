@@ -35,7 +35,7 @@
 .login-password-toggle:hover { color: var(--amber); }
 .login-password-toggle:focus-visible { outline-offset: -3px; }
 
-/* ---- 外壳：顶栏（仅窄屏）+ 侧栏 + 主区 ---- */
+/* ---- 外壳：顶栏 + 侧栏 + 主区 ---- */
 .app {
   --page-head-height: 68px;
   display: flex; flex-direction: column;
@@ -45,23 +45,33 @@
    * （clip 不产生新的滚动容器；fixed 定位的面板/弹层不受影响） */
   overflow: clip;
 }
-/* 页面标题栏随侧栏的版本入口和折叠状态保持等高。 */
-.app:has(.version-badge:not(.hidden)) { --page-head-height: 76px; }
-@media (min-width: 761px) {
-  :root[data-sidebar-collapsed="true"] .app:has(.version-badge:not(.hidden)) { --page-head-height: 94px; }
-}
+/* 顶栏与侧栏顶格同一高度：两行并排，不齐会在左上角显出一道错位的缝。
+ * 版本入口已经搬到顶栏，不再需要为它单独抬高整条头栏。 */
 @media (max-height: 600px) {
   .app { --page-head-height: 52px; }
 }
 
+/* 顶栏在所有宽度都出现。此前只在 ≤760px 显示，桌面端整条是死的：品牌、主题、
+ * 用户都挤在侧栏，顶部既没有位置感也看不出当前在哪一页。 */
 .topbar {
-  display: none;
+  display: flex;
   flex: none;
   align-items: center; gap: 10px;
+  min-height: var(--page-head-height);
   padding: 9px 12px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
+
+/* 顶栏品牌：从侧栏搬来，同一颗按钮（#btn-home）不再出现在两个地方。 */
+.topbar-brand {
+  display: inline-flex; align-items: center; gap: 9px; flex: none;
+  background: transparent; border: 0; color: var(--text);
+  font: 700 15px/1 var(--sans); letter-spacing: .08em;
+  padding: 6px 4px; border-radius: 8px; cursor: pointer;
+}
+.topbar-brand:hover { background: var(--panel-2); }
+.topbar-brand .side-mark { width: 26px; height: 26px; }
 .menu-btn {
   width: 36px; height: 36px; flex: none;
   display: inline-flex; align-items: center; justify-content: center;
@@ -80,6 +90,29 @@
   font-weight: 600; font-size: 14.5px;
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* 面包屑：只在「实例 → 项目」这种两级位置出现，当前页本身仍在 #topbar-title。
+ * 单独一层是因为把祖先名拼进标题会让标题在窄屏被祖先挤掉。 */
+.topbar-crumbs { display: flex; align-items: center; gap: 6px; flex: none; min-width: 0; font-size: 13px; color: var(--muted); }
+.topbar-crumbs:empty { display: none; }
+.topbar-crumb {
+  max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.topbar-crumb-sep { flex: none; color: var(--line); }
+
+/* 顶栏右侧工具区：⋯ 操作在最右，然后是主题/版本/账号。 */
+.topbar-tools { display: flex; align-items: center; gap: 8px; flex: none; margin-left: auto; }
+
+/* 顶栏账号按钮：全站唯一的账号入口（侧栏不再有第二个）。 */
+.topbar-user {
+  display: inline-flex; align-items: center; gap: 7px; flex: none;
+  height: 36px; padding: 0 10px;
+  background: transparent; border: 1px solid transparent; border-radius: 8px;
+  color: var(--text); font-size: 13px;
+}
+.topbar-user:hover { background: var(--panel-2); }
+.topbar-user[aria-expanded="true"] { color: var(--amber); border-color: var(--amber-dim); }
+.topbar-user svg { display: block; flex: none; }
 
 /* ⋯ 会话操作菜单（仅窄屏工作台视图出现） */
 .kebab-wrap { position: relative; flex: none; }
@@ -128,13 +161,7 @@
   padding: 0 20px;
   border-bottom: 1px solid var(--line);
 }
-.side-brand {
-  min-width: 0; gap: 10px;
-  background: none; border: none; padding: 0;
-  text-align: left; cursor: pointer;
-  font-size: 15px; font-weight: 600; letter-spacing: 0.1em;
-}
-.side-brand:hover { color: var(--text-hi); }
+/* 品牌标记与字标：顶栏品牌按钮与登录页字标共用这套零件。 */
 .side-brand-name { white-space: nowrap; }
 .side-mark {
   width: 32px; height: 32px; flex: none;
@@ -142,7 +169,6 @@
   border-radius: 9px;
   background: color-mix(in srgb, var(--amber) 9%, transparent);
 }
-.side-brand .mark { width: 24px; height: 24px; margin: 0; }
 .side-close {
   display: none; align-items: center; justify-content: center;
   margin-left: auto; width: 36px; height: 36px; flex: none;
@@ -216,14 +242,7 @@
 }
 .side-item .glyph svg { display: block; }
 
-/* 底栏左侧主题、右侧头像；用户信息与退出放在头像弹层中。 */
-.side-preferences {
-  position: relative; display: flex; align-items: center; gap: 8px;
-  margin-top: 6px; padding: 6px 0 0 4px; border-top: 1px solid var(--line);
-}
-.side-user { margin-left: auto; }
-.side-user:hover, .side-user[aria-expanded="true"] { background: transparent; }
-.side-user[aria-expanded="true"] { color: var(--amber); }
+/* 用户弹层挂在顶栏的账号按钮上（整块从侧栏搬来，全站只有这一个实例）。 */
 .side-user-menu {
   position: fixed; z-index: 90; width: 232px; max-width: calc(100vw - 24px);
   padding: 6px; border: 1px solid var(--line); border-radius: 10px;
@@ -258,14 +277,16 @@
 .theme-options button:hover { color: var(--text); }
 .theme-options button.active { background: var(--panel); color: var(--amber); box-shadow: var(--shadow-sm); }
 .theme-options .glyph { display: flex; }
-.side-preferences svg.ic-theme { display: none; width: 15px; height: 15px; }
 .theme-options [data-theme-option="system"] svg.ic-system,
 .theme-options [data-theme-option="light"] svg.ic-sun,
 .theme-options [data-theme-option="dark"] svg.ic-moon,
-:root[data-theme-mode="system"] .side-theme-cycle svg.ic-system,
-:root[data-theme-mode="light"] .side-theme-cycle svg.ic-sun,
-:root[data-theme-mode="dark"] .side-theme-cycle svg.ic-moon { display: block; }
-.side-theme-cycle { display: none; }
+:root[data-theme-mode="system"] .topbar-theme-cycle svg.ic-system,
+:root[data-theme-mode="light"] .topbar-theme-cycle svg.ic-sun,
+:root[data-theme-mode="dark"] .topbar-theme-cycle svg.ic-moon { display: block; }
+/* 三态分段控件与单键循环互斥：宽屏用分段（一眼看到当前选项），窄屏用单键
+ * （顶栏放不下三段）。同一时刻只有一套可见，theme.js 同时驱动两者。 */
+.topbar-theme-cycle { display: none; }
+.topbar-theme-cycle svg { display: none; width: 17px; height: 17px; }
 
 /* ---- 内网隧道入口：右侧状态灯 + 文案（在线时点亮） ---- */
 #btn-tunnel { position: relative; }
@@ -351,9 +372,14 @@
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
+/* 主题控件在顶栏里只有一套：宽屏是「跟随系统 / 浅色 / 深色」三态分段，窄屏换成
+ * 单键循环（顶栏放不下三段）。两者互斥显示，theme.js 同时驱动。 */
+@media (min-width: 761px) {
+  .topbar-theme-cycle { display: none; }
+}
+
 /* ---- 窄屏 ---- */
 @media (max-width: 760px) {
-  .topbar { display: flex; }
   .sidebar {
     position: fixed; top: 0; bottom: 0; left: 0; z-index: 50;
     width: min(300px, 84vw);
@@ -372,19 +398,30 @@
   .side-foot { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
   .side-collapse { display: none; }
   .side-tool { width: 40px; height: 40px; }
-  .theme-options button { width: 36px; height: 40px; }
   .side-logout { height: 44px; }
-  .side-user-menu { position: absolute; width: auto; left: 0; right: 0; bottom: calc(100% + 8px); }
+  /* 用户弹层跟着它所在的顶栏按钮走：窄屏铺满两侧留白，挂在顶栏下沿。 */
+  .side-user-menu {
+    position: fixed; width: auto; left: 12px; right: 12px;
+    top: calc(var(--page-head-height) + 6px); bottom: auto;
+  }
+  /* 顶栏在 360px 上要装下 ☰ + 品牌 + 标题 + 主题 + 账号，交出品牌文字与用户名。 */
+  .topbar-brand .side-brand-name { display: none; }
+  .console-user { display: none; }
+  .theme-options { display: none; }
+  .topbar-theme-cycle { display: inline-flex; }
+  .topbar-crumbs { display: none; }
 
 }
 @media (min-width: 761px) {
-  .kebab-wrap { display: none; } /* 桌面端会话操作在工作台头部 */
+  .kebab-wrap { display: none; } /* 桌面端实例操作在工作台头部 */
+  /* 桌面端侧栏常驻，没有抽屉可开：顶栏现在所有宽度都显示，这个 ☰ 必须收起来。 */
+  #btn-menu { display: none; }
 }
 /* 收起偏好在首屏脚本中恢复；窄屏始终展示完整抽屉。 */
 @media (min-width: 761px) {
   :root[data-sidebar-collapsed="true"] .sidebar { width: 68px; }
   :root[data-sidebar-collapsed="true"] .side-head { padding: 0; justify-content: center; }
-  :root[data-sidebar-collapsed="true"] :is(.side-brand, .side-item-label, .side-section-head, .sc-body, .conn-text, .session-empty-text) { display: none; }
+  :root[data-sidebar-collapsed="true"] :is(.side-item-label, .side-section-head, .sc-body, .conn-text, .session-empty-text) { display: none; }
   :root[data-sidebar-collapsed="true"] .side-create { padding: 16px 12px 12px; }
   :root[data-sidebar-collapsed="true"] .side-new { padding: 0; justify-content: center; }
   :root[data-sidebar-collapsed="true"] .side-sessions { padding: 0 4px; }
@@ -397,10 +434,6 @@
   :root[data-sidebar-collapsed="true"] .side-collapse { margin: 0; width: 36px; height: 36px; }
   :root[data-sidebar-collapsed="true"] .side-collapse svg { transform: rotate(180deg); }
   :root[data-sidebar-collapsed="true"] .side-tool { width: 38px; }
-  :root[data-sidebar-collapsed="true"] .side-preferences { flex-direction: column; gap: 2px; padding: 4px 0 0; margin-top: 4px; }
-  :root[data-sidebar-collapsed="true"] .side-user { margin-left: 0; }
-  :root[data-sidebar-collapsed="true"] .theme-options { display: none; }
-  :root[data-sidebar-collapsed="true"] .side-theme-cycle { display: flex; }
   :root[data-sidebar-collapsed="true"] .session-empty { margin: 12px auto; }
   :root[data-sidebar-collapsed="true"] .session-empty-icon { display: block; }
 }

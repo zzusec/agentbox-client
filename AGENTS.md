@@ -23,7 +23,7 @@
 | `internal/workspace` | 会话创建/启停/删除、模板与凭证播种、活动引用与空闲回收。 |
 | `internal/credentials` | 账号凭证读取/保存、轮换同步、续期与账号级可取消锁。 |
 | `internal/config` | 配置 schema、校验、运行时修改与原子写回。所有设置变更必须经 `Config.mutate`/`ApplySettings`/账号方法。 |
-| `internal/server` | HTTP API、鉴权、用户/账号/设置、会话、文件、聊天 WS、终端 WS、隧道、账号出口代理（`proxy*.go`）、监控、空闲回收、凭证同步、Git 变更审查（`git.go`）、用量计量与额度（`usage.go`/`quota.go`/`usagelog.go`）。 |
+| `internal/server` | HTTP API、鉴权、用户/账号/设置、会话、文件、聊天 WS、终端 WS、隧道、实例出口代理（`proxy*.go`）、监控、空闲回收、凭证同步、Git 变更审查（`git.go`）、用量计量与额度（`usage.go`/`quota.go`/`usagelog.go`）。 |
 | `internal/usage` | 回合用量归一化、定价快照、结算编排及 Claude/Codex 终端扫描。 |
 | `internal/store` | SQLite(`data/state.db`)：sessions/users/tokens/usage_events/quotas/credit_ledger；首次打开会导入旧版 `state.json`。 |
 | `internal/backup` | 版本化 tar.gz 备份、SQLite 在线快照、清单/哈希验证、恢复到新目录；CLI 在 cmd/agentbox/backup.go。 |
@@ -522,12 +522,22 @@ data/
 - 前端据此把「休眠」与「已停止」分开展示，并在发消息时自动重连唤醒
   （chat WS 的 `startSession` 是幂等的）。
 
-### 账号出口 IP 代理
+### 实例出口 IP 代理
 
-`internal/config`（代理池 schema + 账号 `proxy_id`）+ `internal/server/proxydial.go`
+`internal/config`（代理池 schema + 实例 `proxy_id`）+ `internal/server/proxydial.go`
 （socks5 / http CONNECT 拨号）+ `proxybridge.go`（容器侧桥接与 env 注入）+
 `proxies.go`（管理接口）。前端在 `web/src/proxies.ts`。
 
+- **出口绑定在实例上，不在凭证上**（schema 11 的 `sessions.proxy_id`）：一个容器可以
+  同时带 Claude 和 Codex 两个账号，出口只有一个。新建实例必须显式选
+  `kind=residential` 的代理，机房代理不进新实例可选项；历史未标注 kind 的代理只供
+  既有实例兼容，不得自动补标 `residential`。启动与重绑在空间锁内复查账号授权、类型
+  与代理。鉴权后的 `GET /api/instances/proxies` 只回 id/name/kind，不泄露地址与认证
+  信息；完整代理管理仍 admin-only。
+- 容器侧的桥接身份是**实例**不是账号：`proxyEnvList` 用 `sess.ID` 拼桥接 URL，
+  口令是 `auth_token` 对**实例 ID** 的 HMAC（`proxySecret`），不落盘；bridge 按实例
+  反查 `instanceProxy`。没有它，同一台机器上任何容器都能白嫖别人的出口 IP。轮换
+  `auth_token` 会一起换掉。
 - **为什么要有本地桥接，而不是把 socks5:// 直接塞给容器。** 代理池基本都是 SOCKS5，
   但容器里的 claude 是 Node/undici，`HTTPS_PROXY` 只认 http(s)——给它 socks5:// 它
   **不报错、直接忽略**，照原样打官方接口。表现是「配了代理但 IP 没换」，且没有任何
@@ -538,18 +548,23 @@ data/
   Node/Go 读大写；只给一半的后果是部分请求悄悄走了服务器自己的 IP，而不是报错。
   变量名列在 `proxyEnvNames`，`tmuxEnvSync` 靠它在解绑后清除终端里的残留值——
   加变量必须同步这个列表。这与隧道**刻意不设全局代理**的取向相反：隧道是「按需访问
-  内网」，这里是「这个账号的一切请求都必须从这个 IP 出去」。
-- **全链路 fail-closed。** 代理停用 / 悬空 / 桥接没起来时，`proxyEnvList` 照样注入、
-  `bridgeAuth` 返回 502、`acctClient` 直接报错。**不要改成回落直连**：直连等于把
-  服务器真实 IP 交给 provider，正是绑代理要防的事，而且是静默发生的。
-- 桥接的账号口令是 `auth_token` 对账号 ID 的 HMAC（`proxySecret`），不落盘。没有它，
-  同一台机器上任何容器都能白嫖别人账号的出口 IP。轮换 `auth_token` 会一起换掉。
-- 服务端自己发的官方请求（OAuth 换令牌、profile、Key 探测）走 `acctClient`，
-  与容器同一个出口。登录来源 IP 和推理请求 IP 对不上是订阅号被风控的典型形状。
+  内网」，这里是「这个实例的一切请求都必须从这个 IP 出去」。
+- **全链路 fail-closed。** 实例代理缺失/无效/停用/非住宅/桥接没起来时，
+  `instanceProxy` 报错、`bridgeAuth` 返回 502。`RequireInstanceProxy()`（默认开）下
+  未绑代理的实例无法启动；操作员显式关掉才按 pre-v11 行为注入空 env 放行直连。
+  **不要改成默认回落直连**：直连等于把服务器真实 IP 交给 provider，正是绑代理要防
+  的事，而且是静默发生的。
+- 服务端自己发的账号级官方请求（OAuth 换令牌、profile、Key 探测）走 `acctClient`，
+  按**账号自己**的 `proxy_id`（`cfg.AccountProxy`）路由，与实例代理是两条线；账号
+  env 不能覆盖实例代理 env。同一账号绑定多个实例且代理不同时，账号级请求**仍按账号
+  自身绑定走——这是定案**（2026-10-01）：账号级出口是该账号的身份出口，不随实例变化，
+  也不能静默改出口、选第一个实例或施加账号反向唯一性。管理员应让账号绑定与实例代理
+  大体一致，否则登录来源 IP 和推理请求 IP 对不上，是订阅号被风控的典型形状。
 - 域名一律在代理侧解析（socks5h 语义 / CONNECT 请求行），不在服务端本地解析——
   否则 DNS 查询会从服务器自己的解析器漏出去。
-- 删代理会连带解绑账号，且在**同一次 mutate 里**完成：留下悬空的 `proxy_id` 会让之后
-  任何一次配置写入都卡在校验上，那时已经看不出是哪一步埋的。
+- 删代理：仍有实例绑定时先 409 列出受影响实例，`?force=1` 才继续——强行删除**不会**
+  清掉实例的 `proxy_id`，那些实例因 fail-closed 无法启动，须改绑后才能启动。账号上
+  遗留的绑定在同一次 mutate 里清空，避免悬空 `proxy_id` 卡住之后的每次配置写入。
 
 ### 内网隧道
 
@@ -585,7 +600,12 @@ data/
   `Authorization` 头，别在新接口上放宽这一点。
 - API 增加路由时明确鉴权层级：公开、`s.auth`、`s.admin`、会话资源还必须套 `s.withSession` 做属主校验。
 - 所有会话内文件/目录属主都要保持 `dockerx.AgentUID/AgentGID`（1000/1000），否则容器内 agent 用户可能写不了。
-- 容器安全边界：非 root、`no-new-privileges`、内存/CPU/PID 限额、固定挂载 `/workspace`、`/home/agent`、`/shared`。不要轻率改挂载路径或容器用户。
+- 容器安全边界：非 root、`no-new-privileges`、内存/CPU/PID 限额、固定挂载
+  `/home/agent`、`/shared`，工作区挂载分两代：旧容器挂 `/workspace`，v11 起新容器
+  直接挂工作区的**服务器绝对路径**（容器内 cwd 与服务器路径一致；`containerWorkspace`
+  按 `RunningWithMount` 识别旧容器并回落 `/workspace`，chat/终端/Git/文件一律经它取
+  cwd）。不要轻率改挂载路径或容器用户；项目、Git、文件接口里的路径都是相对仓库根或
+  工作区根，不是容器内绝对路径。
 - 主控制台前端是 TypeScript：源码在 `web/src/*.ts`，`npm run build`（tsc，无打包器）
   逐文件编译成 `internal/web/static/js/*.js`，产物提交进 git 并被 `go:embed` 吃进二进制。
   **改了 `.ts` 一定要重新 `npm run build` 并提交产物**，CI 会校验两者一致。
@@ -661,7 +681,7 @@ data/
 
 - `usage.Service` 是解析、定价和终端扫描的业务入口，不能反向依赖 server。Store.InsertUsage 仍一次事务写用量与扣额度，终端 UpsertTerminalUsage 绝不扣额度。
 - 新行 `PriceSnapshot` 包含来源、价格键、普通/长上下文档和阈值。终端 upsert 在同一事务读取首份快照，续写不能改用新价；旧行没有快照时不要伪造历史单价。Claude 0 费用按表补算时保存 table 来源。
-- 当前 SQLite schema=10（迁移明细见 docs/architecture/database-migrations.md），user_version 在迁移事务内更新；未知更高版本必须在建表/改 journal 前拒绝。版本 1 接收旧库，版本 2 加价格快照。回退由发布脚本检查目标二进制的配置、schema 与 compatibility_epoch；不兼容或缺少检查能力时须恢复兼容备份到新目录，不能手改 current。
+- 当前 SQLite schema=11（迁移明细见 docs/architecture/database-migrations.md），user_version 在迁移事务内更新；未知更高版本必须在建表/改 journal 前拒绝。版本 1 接收旧库，版本 2 加价格快照。回退由发布脚本检查目标二进制的配置、schema 与 compatibility_epoch；不兼容或缺少检查能力时须恢复兼容备份到新目录，不能手改 current。
 - `agent.Adapter` 提供能力、聊天/标题命令与事件解码，Event 统一 session ID、partial/output 标记及原始 JSON。server 按能力决定 app-server 优先/exec 回退，不在 Handler 内新增 provider 事件形状判断。
 - 协议样本放在 agent/usage 的 testdata，全部为合成脱敏数据。Linux 测试脚本必须复制这些 testdata；禁止读取真实用户 rollout 当测试夹具。
 

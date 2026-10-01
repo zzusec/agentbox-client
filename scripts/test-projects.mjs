@@ -19,17 +19,50 @@ export async function smoke(page) {
   await new Promise(done => server.listen(0, '127.0.0.1', done));
   const base = `http://127.0.0.1:${server.address().port}`;
   const errors = [], writes = [], terminalURLs = [], filePaths = [];
-  const account = { id: 'fixture-account', type: 'claude', label: '开发账号', sessions: 2, cred_status: 'ok', proxy_id: 'fixture-proxy' };
+  const claudeAccount = { id: 'fixture-account', type: 'claude', label: '开发账号', sessions: 2, cred_status: 'ok' };
+  const codexAccount = { id: 'fixture-codex', type: 'codex', label: 'Codex 备用', sessions: 1, cred_status: 'ok' };
+  const residentialProxy = { id: 'fixture-proxy', name: '住宅出口', kind: 'residential' };
+  const datacenterProxy = { id: 'fixture-dc', name: '机房出口', kind: 'datacenter' };
+  const makeSession = (id, over) => ({
+    id, user: 'fixture', agent: 'claude',
+    account_id: claudeAccount.id, account_label: claudeAccount.label,
+    claude_account_id: claudeAccount.id, codex_account_id: '',
+    claude_account_label: claudeAccount.label, codex_account_label: '',
+    proxy_id: residentialProxy.id, proxy_label: residentialProxy.name,
+    default_agent: 'claude', default_model: 'fixture',
+    workspace_path: `/srv/agentbox/data/users/fixture/sessions/${id}/workspace`,
+    container_id: '', status: 'stopped', stop_reason: '',
+    created_at: '2026-09-30T10:00:00Z', updated_at: '2026-09-30T10:00:00Z',
+    ...over,
+  });
   let sessions = [
-    { id: 'fixture-space', name: '产品开发', agent: 'claude', account_id: account.id, account_label: account.label, container_id: 'fixture-container-a', status: 'running', default_model: 'fixture' },
-    { id: 'fixture-second', name: '内部工具', agent: 'claude', account_id: account.id, account_label: account.label, container_id: 'fixture-container-b', status: 'stopped', default_model: 'fixture' },
+    makeSession('fixture-space', { name: '产品开发', container_id: 'fixture-container-a', status: 'running' }),
+    // 默认工具是 Codex、但同时绑定了 Claude：技能/MCP 页签必须按绑定账号判定而仍然可用。
+    makeSession('fixture-second', { name: '内部工具', agent: 'codex', default_agent: 'codex', container_id: 'fixture-container-b', codex_account_id: codexAccount.id, codex_account_label: codexAccount.label }),
+    makeSession('fixture-third', { name: '纯 Codex', agent: 'codex', default_agent: 'codex', claude_account_id: '', claude_account_label: '', codex_account_id: codexAccount.id, codex_account_label: codexAccount.label }),
   ];
-  const project = (id, name) => ({ id, name, path: '/workspace/' + name, created_at: '2026-09-30T10:00:00Z', updated_at: '2026-09-30T10:00:00Z' });
+  const project = (id, name, agent = '') => ({ id, name, agent, path: `/srv/agentbox/data/users/fixture/sessions/fixture-space/workspace/${name}`, created_at: '2026-09-30T10:00:00Z', updated_at: '2026-09-30T10:00:00Z' });
   const projects = {
     'fixture-space': [project('fixture-project', '订单服务 + API')],
     'fixture-second': [project('fixture-other', '运营后台')],
   };
   let failList = false, failCreate = false, holdList = false, releaseList;
+  // 实例资源：第一帧故意给 window_ms=0（前端必须显示「测量中」而不是 0），
+  // 之后给有效窗口；磁盘第一帧标 stale，验证「统计中」不会被当成 0。
+  // 网络计数器逐帧增长；netRestart 置位后的那一帧把计数器打回去，模拟容器重启。
+  let statsReads = 0;
+  let netRx = 4 * 1024 * 1024, netTx = 1024 * 1024, netRestart = false;
+  const statsItems = () => sessions.map(session => ({
+    session_id: session.id, name: session.name, agent: session.agent,
+    running: session.status === 'running', proxy_bound: !!session.proxy_id,
+    cpu_percent: session.status === 'running' ? 42 : 0,
+    mem_usage: session.status === 'running' ? 512 * 1024 * 1024 : 0,
+    mem_limit: 2 * 1024 * 1024 * 1024,
+    pids: session.status === 'running' ? 7 : 0,
+    disk_bytes: 3 * 1024 * 1024, disk_stale: statsReads <= 1,
+    net_rx_bytes: netRx, net_tx_bytes: netTx,
+    started_at: session.status === 'running' ? Date.now() - 60000 : 0,
+  }));
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => {
     if (window !== window.top || sessionStorage.getItem('agentbox_test_projects_seeded')) return;
@@ -43,11 +76,20 @@ export async function smoke(page) {
     if (method !== 'GET') writes.push({ path, method, body: request.postDataJSON() });
     let body = {};
     if (path === '/api/me') body = { user: 'fixture', role: 'user', timezone: 'UTC', models: { claude: [], codex: [] }, quota: { metered: false } };
-    else if (path === '/api/accounts') body = [account];
+    else if (path === '/api/accounts') body = [claudeAccount, codexAccount];
+    // 普通用户可读的最小代理选项：只有 id/name/kind，没有地址或凭证。
+    else if (path === '/api/instances/proxies') body = [residentialProxy, datacenterProxy];
+    else if (path === '/api/instances/stats') {
+      statsReads++;
+      if (netRestart) { netRx = 1024; netTx = 512; netRestart = false; }
+      else { netRx += 512 * 1024; netTx += 256 * 1024; }
+      body = { now: Date.now(), window_ms: statsReads > 1 ? 5000 : 0, items: statsItems() };
+    }
     else if (path === '/api/sessions') {
       if (method === 'POST') {
         const input = request.postDataJSON();
-        body = { ...sessions[0], ...input, id: 'fixture-created', container_id: '', status: 'stopped' };
+        body = makeSession('fixture-created', { ...input, name: input.name, status: 'stopped', container_id: '' });
+        body.account_id = input.claude_account_id || input.codex_account_id;
         sessions.push(body); projects[body.id] = [];
       } else body = sessions;
     } else if (path.endsWith('/projects')) {
@@ -57,9 +99,16 @@ export async function smoke(page) {
         await route.fulfill({ status: 409, json: { error: method === 'POST' ? '项目名称已存在' : '合成列表读取失败' } }); return;
       }
       if (method === 'POST') {
-        body = project('fixture-new', request.postDataJSON().name);
+        body = project('fixture-new', request.postDataJSON().name, request.postDataJSON().agent || '');
         projects[sessionID].push(body);
       } else body = projects[sessionID] || [];
+    } else if (path.includes('/projects/')) {
+      // 项目设置（PATCH）：把 agent 落到夹具里，复读时才看得到效果。
+      const sessionID = path.split('/')[3], projectID = path.split('/')[5];
+      const input = request.postDataJSON();
+      const row = (projects[sessionID] || []).find(item => item.id === projectID);
+      if (row) { row.name = input.name; row.agent = input.agent || ''; }
+      body = row || project(projectID, input.name, input.agent || '');
     } else if (path.endsWith('/files')) { filePaths.push(url.searchParams.get('path')); body = []; }
     else if (path.endsWith('/history')) body = { entries: [], thread: null, costs: {} };
     else if (path.endsWith('/models')) body = { models: [], default_reasoning: { support: 'unknown' } };
@@ -74,6 +123,12 @@ export async function smoke(page) {
     await page.locator(`#${selectID} + .select-trigger`).click();
     await page.locator('.select-panel:popover-open [role=option]').filter({ hasText: label }).click();
   };
+  // 精确匹配：像「跟随实例默认（Claude Code）」这种选项会把宽松匹配也命中，
+  // 点上就会因为 strict mode 报错。
+  const chooseExact = async (selectID, label) => {
+    await page.locator(`#${selectID} + .select-trigger`).click();
+    await page.locator('.select-panel:popover-open [role=option]').filter({ hasText: new RegExp(`^${label}$`) }).click();
+  };
   try {
     await page.setViewportSize({ width: 1440, height: 960 });
     await page.goto(base + '/#/');
@@ -83,6 +138,13 @@ export async function smoke(page) {
     assert.equal(await page.locator('#btn-settings').isVisible(), false);
     assert.equal(await page.locator('#btn-projects').getAttribute('aria-current'), 'page');
     assert.deepEqual(writes, [], 'home must not mutate resources');
+    // 顶栏是唯一一条：品牌、主题、账号各只出现一次，侧栏里不再有第二套。
+    assert.equal(await page.locator('.topbar-brand').count(), 1);
+    assert.equal(await page.locator('.side-head .topbar-brand, .sidebar .topbar-brand').count(), 0, 'brand must not be duplicated in the sidebar');
+    assert.equal(await page.locator('#btn-menu').isVisible(), false, 'desktop has no drawer to open');
+    assert.equal(await page.locator('.topbar .theme-options button').count(), 3);
+    assert.equal(await page.locator('.sidebar .theme-options').count(), 0, 'theme must live in the topbar only');
+    assert.equal(await page.locator('#btn-user-menu').count(), 1);
     await page.locator('#project-search').fill('订单');
     assert.equal(await page.locator('.project-tile').count(), 1);
     await page.locator('#project-search').fill('not-found');
@@ -91,7 +153,9 @@ export async function smoke(page) {
     await choose('project-filter', '内部工具');
     assert.equal(await page.locator('.project-tile').count(), 1);
     assert.match(await page.locator('.project-tile').innerText(), /运营后台/);
-    await choose('project-filter', '全部工作空间');
+    await choose('project-filter', '全部实例');
+    // 项目卡显示它自己的开发工具；没设过就跟随实例默认。
+    assert.match(await page.locator('[data-project-id="fixture-project"]').innerText(), /Claude Code（默认）/);
     await mkdir(resolve('output/playwright'), { recursive: true });
     await page.screenshot({ animations: 'disabled', path: resolve('output/playwright/projects-desktop-light.png') });
 
@@ -101,7 +165,12 @@ export async function smoke(page) {
     await page.locator('#project-ok').click();
     await page.locator('#project-error').waitFor({ state: 'visible' });
     assert.deepEqual(writes, []);
+    // 服务器目录提示必须如实：给出真实绝对路径，并说明本机映射还没实现。
     await page.locator('#project-name').fill('新项目');
+    const pathHint = await page.locator('#project-path-hint').innerText();
+    assert.match(pathHint, /\/srv\/agentbox\/data\/users\/fixture\/sessions\/fixture-second\/workspace\/新项目/);
+    assert.match(pathHint, /本机目录映射尚未实现/);
+    assert.equal(await page.locator('#project-path-hint input').count(), 0, 'path must not be an editable input');
     failCreate = true;
     await page.locator('#project-ok').click();
     await page.waitForFunction(() => document.querySelector('#project-error').textContent === '项目名称已存在');
@@ -111,26 +180,106 @@ export async function smoke(page) {
     await page.locator('#dlg-project').waitFor({ state: 'hidden' });
     await page.waitForFunction(() => document.querySelectorAll('.project-tile').length === 3);
     assert.deepEqual(writes.map(write => write.path), ['/api/sessions/fixture-second/projects', '/api/sessions/fixture-second/projects']);
-    assert.deepEqual(writes.at(-1).body, { name: '新项目' });
+    // agent 是项目自己的工具选择，空 = 跟随实例默认。
+    assert.deepEqual(writes.at(-1).body, { name: '新项目', agent: '' });
+
+    // 项目设置：工具只列实例绑定过的，保存走 PATCH。
+    await page.locator('[data-project-settings="fixture-project"]').click();
+    await page.locator('#dlg-project').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#project-title').innerText(), '项目设置');
+    assert.equal(await page.locator('#project-workspace-field').isVisible(), false, 'a project cannot change its instance');
+    await chooseExact('project-agent', 'Claude Code');
+    await page.locator('#project-ok').click();
+    await page.locator('#dlg-project').waitFor({ state: 'hidden' });
+    assert.equal(writes.at(-1).method, 'PATCH');
+    assert.equal(writes.at(-1).path, '/api/sessions/fixture-space/projects/fixture-project');
+    assert.deepEqual(writes.at(-1).body, { name: '订单服务 + API', agent: 'claude' });
 
     await page.locator('#btn-workspaces').click();
     await page.waitForURL('**/#/workspaces');
     assert.equal(await page.locator('#btn-workspaces').getAttribute('aria-current'), 'page');
     assert.equal(await page.locator('#btn-projects').getAttribute('aria-current'), null);
-    assert.equal(await page.locator('.workspace-tile').count(), 2);
-    assert.equal(await page.locator('#workspace-accounts').innerText(), '1', 'account reuse is unchanged');
-    assert.match(await page.locator('.workspace-tile').first().innerText(), /fixture-container-a/);
+    assert.equal(await page.locator('.workspace-tile').count(), 3);
+    assert.equal(await page.locator('#workspace-accounts').innerText(), '2', 'claude + codex bindings are counted separately');
+    const firstTile = page.locator('.workspace-tile').first();
+    assert.match(await firstTile.innerText(), /fixture-container-a/);
+    assert.match(await firstTile.innerText(), /开发账号/, 'the bound claude account is listed');
+    assert.match(await firstTile.innerText(), /住宅出口/, 'the instance proxy is listed');
+    assert.match(await firstTile.innerText(), /\/srv\/agentbox\/data\/users\/fixture\/sessions\/fixture-space\/workspace/, 'the server workspace path is listed');
+    // 第一帧 window_ms=0：CPU/网络必须显示「测量中」，磁盘必须是「统计中」，而不是 0。
+    await firstTile.locator('dl.workspace-usage').waitFor();
+    await page.waitForFunction(() => {
+      const usage = document.querySelector('.workspace-tile dl.workspace-usage');
+      return !!usage && usage.innerText.includes('统计中');
+    });
+    const usageText = await firstTile.locator('dl.workspace-usage').innerText();
+    assert.match(usageText, /CPU\s+测量中/);
+    assert.match(usageText, /磁盘\s+统计中/);
+    assert.doesNotMatch(await page.locator('.workspace-tile').nth(1).locator('dl.workspace-usage').innerText(), /CPU\s+\d/, 'stopped instance must not show a number');
     await page.locator('#toast.show').waitFor({ state: 'hidden' });
     await page.screenshot({ animations: 'disabled', path: resolve('output/playwright/workspaces-desktop-light.png') });
-    await page.reload();
-    await page.locator('#view-workspaces').waitFor({ state: 'visible' });
+
+    // 离开实例视图必须停止轮询（否则没人看的页面会一直打服务端）。
+    await page.goto(base + '/#/');
+    await page.locator('.project-tile').first().waitFor();
+    const readsWhileAway = statsReads;
+    await page.waitForTimeout(5500);
+    assert.equal(statsReads, readsWhileAway, 'resource polling must stop after leaving the instances view');
+    // 回来立即重新采样一次，这次窗口有效，CPU 不再停在「测量中」。
+    await page.goto(base + '/#/workspaces');
+    await page.waitForFunction(() => document.querySelectorAll('#workspace-grid .workspace-tile').length === 3);
+    await page.waitForFunction(() => {
+      const usage = document.querySelector('.workspace-tile dl.workspace-usage');
+      return !!usage && !usage.textContent.includes('测量中') && usage.textContent.includes('%');
+    });
+    await page.screenshot({ animations: 'disabled', path: resolve('output/playwright/workspaces-live-desktop-light.png') });
+
+    // 容器重启后计数器回退：那一帧网络必须显示「测量中」，下一帧恢复速率。
+    // 不能把负差压成 ↓ 0 B/s，也不能拿「真计数 − 失败帧的 0」冒充峰值。
+    netRestart = true;
+    await page.waitForFunction(() => {
+      const usage = document.querySelector('.workspace-tile dl.workspace-usage');
+      return !!usage && usage.textContent.includes('测量中') && !usage.textContent.includes('B/s');
+    });
+    await page.waitForFunction(() => {
+      const usage = document.querySelector('.workspace-tile dl.workspace-usage');
+      return !!usage && usage.textContent.includes('B/s');
+    });
+
     await page.locator('#btn-new-workspace').click();
+    // 必填代理：一个都不选就提交，必须被拦下且不发出请求。
     await page.locator('#new-name').fill('新增空间');
+    const writesBeforeCreate = writes.length;
+    await page.locator('#new-ok').click();
+    await page.locator('#new-error').waitFor({ state: 'visible' });
+    assert.match(await page.locator('#new-error').innerText(), /至少绑定一个账号/);
+    assert.equal(writes.length, writesBeforeCreate, 'incomplete instance must not be submitted');
+    // 只勾 Codex 账号：默认工具跟着变成 Codex，代理仍然必填。
+    await choose('new-account-codex', 'Codex 备用');
+    assert.match(await page.locator('#new-default-agent + .select-trigger').innerText(), /Codex CLI/);
+    await page.locator('#new-ok').click();
+    await page.locator('#new-error').waitFor({ state: 'visible' });
+    assert.match(await page.locator('#new-error').innerText(), /住宅代理/);
+    assert.equal(writes.length, writesBeforeCreate, 'an instance without a residential proxy must not be submitted');
+    // 机房代理不出现在新实例可选项里：新实例只能用住宅出口。
+    await page.locator('#new-proxy + .select-trigger').click();
+    assert.equal(await page.locator('.select-panel:popover-open [role=option]').filter({ hasText: '机房出口' }).count(), 0);
+    await page.keyboard.press('Escape');
+    await choose('new-account-claude', '开发账号');
+    await choose('new-proxy', '住宅出口');
+    await choose('new-default-agent', 'Claude Code');
     await page.locator('#new-ok').click();
     await page.locator('#dlg-new').waitFor({ state: 'hidden' });
-    await page.waitForFunction(() => document.querySelectorAll('.workspace-tile').length === 3);
+    await page.waitForFunction(() => document.querySelectorAll('.workspace-tile').length === 4);
     assert.equal(writes.at(-1).path, '/api/sessions');
-    assert.equal(writes.at(-1).body.account_id, account.id);
+    assert.deepEqual(writes.at(-1).body, {
+      name: '新增空间',
+      claude_account_id: claudeAccount.id,
+      codex_account_id: codexAccount.id,
+      proxy_id: residentialProxy.id,
+      default_agent: 'claude',
+      git_connection_id: '',
+    });
     assert.equal(new URL(page.url()).hash, '#/workspaces');
     assert.equal(terminalURLs.length, 0, 'configuration and creation must not open a terminal');
 
@@ -142,6 +291,9 @@ export async function smoke(page) {
     assert.equal(terminalURL.searchParams.get('mode'), 'agent');
     assert.equal(terminalURL.searchParams.get('project'), '订单服务 + API');
     assert.equal(await page.locator('#wb-name').innerText(), '订单服务 + API');
+    // 面包屑报出所属实例，标题只留当前项目。
+    assert.equal(await page.locator('#topbar-title').innerText(), '订单服务 + API');
+    assert.match(await page.locator('#topbar-crumbs').innerText(), /产品开发/);
     assert.equal(await page.locator('.tab[data-tab="chat"]').isVisible(), false);
     assert.equal(await page.locator('#btn-delete').isVisible(), false);
     await page.locator('.tab[data-tab="files"]').click();
@@ -150,10 +302,24 @@ export async function smoke(page) {
     await page.reload();
     await page.locator('#tab-files').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#wb-name').innerText(), '订单服务 + API');
-    await page.locator('[data-session-id="fixture-space"]').click();
+    await page.locator('.session-card[data-session-id="fixture-space"]').click();
     await page.waitForURL('**/#/sessions/fixture-space/chat');
     assert.equal(await page.locator('.tab[data-tab="chat"]').isVisible(), true);
     assert.equal(await page.locator('#wb-name').innerText(), '产品开发');
+    assert.match(await page.locator('#wb-meta').innerText(), /Claude Code：开发账号/);
+
+    // 技能/MCP 页签按绑定账号判定：默认 Codex、同时绑定 Claude 的实例仍可用；
+    // 纯 Codex 实例（没有 Claude 账号）才隐藏。
+    await page.locator('.session-card[data-session-id="fixture-second"]').click();
+    await page.waitForURL('**/#/sessions/fixture-second/chat');
+    await page.waitForFunction(() => document.querySelector('#wb-name')?.textContent === '内部工具');
+    await page.locator('#tab-btn-skills').waitFor({ state: 'visible' });
+    await page.locator('#tab-btn-mcp').waitFor({ state: 'visible' });
+    await page.locator('.session-card[data-session-id="fixture-third"]').click();
+    await page.waitForURL('**/#/sessions/fixture-third/chat');
+    await page.waitForFunction(() => document.querySelector('#wb-name')?.textContent === '纯 Codex');
+    assert.equal(await page.locator('#tab-btn-skills').isVisible(), false);
+    assert.equal(await page.locator('#tab-btn-mcp').isVisible(), false);
 
     await page.goto(base + '/#/projects/fixture-space/missing/term');
     await page.waitForURL('**/#/');
@@ -202,6 +368,14 @@ export async function smoke(page) {
         }, theme);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
         assert.equal(await page.locator('#empty').evaluate(element => element.scrollWidth <= element.clientWidth), true);
+        // 顶栏在每个宽度都必须在，且主题控件只有一套可见（宽屏三态组、窄屏单键）。
+        assert.equal(await page.locator('.topbar').isVisible(), true);
+        const themeGroupVisible = await page.locator('.topbar .theme-options').isVisible();
+        const themeCycleVisible = await page.locator('.topbar [data-theme-cycle]').isVisible();
+        assert.notEqual(themeGroupVisible, themeCycleVisible, 'exactly one theme control set must be visible');
+        assert.equal(themeGroupVisible, width > 760, 'wide screens show the three-state group');
+        assert.equal(await page.locator('#btn-user-menu').isVisible(), true);
+        assert.equal(await page.locator('#btn-menu').isVisible(), width <= 760);
         await page.screenshot({ animations: 'disabled', path: resolve(`output/playwright/projects-${width}-${theme}.png`) });
         await page.goto(base + '/#/workspaces');
         await page.locator('#workspace-grid .workspace-tile').first().waitFor();
@@ -221,19 +395,27 @@ export async function smoke(page) {
     await page.locator('#workspace-empty').waitFor({ state: 'visible' });
     await page.goto(base + '/#/');
     holdList = true;
-    sessions = [{ id: 'fixture-second', name: '延迟列表', agent: 'claude', account_id: account.id, status: 'stopped' }];
+    sessions = [makeSession('fixture-second', { name: '延迟列表' })];
     await refresh();
     await page.waitForFunction(() => document.querySelector('#project-workspace-total').textContent === '1');
     await page.locator('#btn-user-menu').click();
+    assert.equal(await page.locator('#sidebar-user-name').innerText(), 'fixture');
+    assert.equal(await page.locator('#btn-git-management').isVisible(), true);
     await page.locator('#btn-logout').click();
     releaseList?.();
     await page.locator('#login').waitFor({ state: 'visible' });
     await page.waitForLoadState('load');
     assert.equal(await page.evaluate(() => localStorage.getItem('agentbox_token')), null, 'logout must survive reload without fixture reauthentication');
     assert.equal(await page.locator('.project-tile').count(), 0, 'logout clears project data');
-    assert.deepEqual(writes.filter(write => write.path !== '/api/logout' && write.path !== '/api/sessions' && !write.path.endsWith('/projects')), [], 'no account/proxy/container lifecycle writes');
+    const readsAfterLogout = statsReads;
+    await page.waitForTimeout(600);
+    assert.equal(statsReads, readsAfterLogout, 'logout must stop resource polling');
+    assert.deepEqual(
+      writes.filter(write => write.path !== '/api/logout' && write.path !== '/api/sessions' && !write.path.endsWith('/projects') && !write.path.includes('/projects/')),
+      [], 'no account/proxy/container lifecycle writes',
+    );
     assert.deepEqual(errors, []);
-    console.log('Projects: scoped creation, validation/retry, filters, workspace configuration, ordinary-user access, project terminal URLs, file scope, deep links/stale routes, partial failures, four widths/both themes, empty states and logout cleanup passed');
+    console.log('Projects: dual-account instance creation with mandatory residential proxy, project tool selection/edit, single topbar theme+account, live instance resources (measuring/stale/stopped states), polling start/stop, scoped creation, validation/retry, filters, workspace configuration, ordinary-user access, project terminal URLs, file scope, deep links/stale routes, partial failures, four widths/both themes, empty states and logout cleanup passed');
   } finally {
     releaseList?.();
     await page.unroute('**/api/**'); server.closeAllConnections(); await new Promise(done => server.close(done));

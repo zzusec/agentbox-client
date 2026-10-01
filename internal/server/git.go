@@ -52,7 +52,7 @@ func (s *Server) runGit(ctx context.Context, sess store.Session, dir string, arg
 	if err != nil || !filepath.IsLocal(rel) {
 		return "", errors.New("invalid Git repository path")
 	}
-	return s.git.Run(ctx, sess.ID, filepath.ToSlash(rel), args...)
+	return s.git.Run(ctx, sess.ID, s.containerWorkspace(ctx, sess), filepath.ToSlash(rel), args...)
 }
 
 func (s *Server) lockGit(ctx context.Context, sess store.Session, dir string) (func(), error) {
