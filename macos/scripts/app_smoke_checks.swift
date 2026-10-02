@@ -980,6 +980,27 @@ struct AppSmokeChecks {
         surface.unmarkText()
         precondition(composition.isHidden, "committing or cancelling must take the preview away")
 
+        // ⌘C copies the selection without going through the Edit menu, whose
+        // route depends on the first responder and on SwiftTerm's validation.
+        surface.feed(text: "copy me")
+        surface.selectAll(nil)
+        NSPasteboard.general.clearContents()
+        let command = NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+            windowNumber: 0, context: nil, characters: "c", charactersIgnoringModifiers: "c",
+            isARepeat: false, keyCode: 8
+        )!
+        precondition(surface.performKeyEquivalent(with: command), "⌘C must be handled by the terminal")
+        precondition(NSPasteboard.general.string(forType: .string)?.contains("copy me") == true,
+                     "the selection must reach the clipboard")
+        // Anything else still travels its usual path.
+        let other = NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+            windowNumber: 0, context: nil, characters: "k", charactersIgnoringModifiers: "k",
+            isARepeat: false, keyCode: 40
+        )!
+        precondition(!surface.performKeyEquivalent(with: other), "only ⌘C is claimed here")
+
         // A resize has to repaint the whole surface: SwiftTerm invalidates only
         // the rows the terminal marked dirty, so the strip a widening view
         // uncovers would otherwise keep the pixels of an older frame. The

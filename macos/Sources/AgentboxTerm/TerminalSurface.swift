@@ -226,6 +226,25 @@ final class TerminalSurface: TerminalView {
         return window.convertToScreen(convert(anchor, to: nil))
     }
 
+    /// ⌘C copies the selection, handled here rather than left to the Edit menu.
+    ///
+    /// The menu route only works when the terminal is the first responder and
+    /// SwiftTerm's own menu validation agrees; when either said otherwise the
+    /// key did nothing at all and a visible selection could not be copied. The
+    /// view knows whether it has a selection, so it answers for itself and
+    /// leaves every other key equivalent alone.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+              event.charactersIgnoringModifiers?.lowercased() == "c",
+              selectionActive,
+              let text = getSelection(), !text.isEmpty else {
+            return super.performKeyEquivalent(with: event)
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        return true
+    }
+
     /// ⌘V with files or an image on the clipboard uploads them, the same as
     /// dropping them: files copied in Finder arrive as file URLs, a screenshot
     /// copied with ⌃⇧⌘4 arrives as image data with no text. Anything with text
