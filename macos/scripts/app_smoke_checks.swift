@@ -617,6 +617,16 @@ struct AppSmokeChecks {
         precondition(shellTab.tabTitle == "demo · 终端 2")
         precondition(shellTab.paneKey != "w/demo", "a shell tab must not take the agent tab's key")
         tabStripChecks(client: client, workspace: shellWorkspace)
+        inputMethodChecks()
+        // Uploads report progress as text in the banner; a progress bar over
+        // the terminal was one more thing covering the output.
+        let uploadTab = TerminalViewController(
+            client: client, workspace: shellWorkspace,
+            project: RemoteProject(id: "p-upload", name: "demo", path: "/w/demo")
+        )
+        uploadTab.loadViewIfNeeded()
+        precondition(views(in: uploadTab.view).compactMap { $0 as? NSProgressIndicator }.isEmpty,
+                     "the terminal must not carry an upload progress bar")
 
         // Right-click offers a new shell and the AI session; double-click opens.
         let menuSidebar = SidebarViewController()
@@ -901,6 +911,32 @@ struct AppSmokeChecks {
         try? await Task.sleep(nanoseconds: 60_000_000)
     }
 
+    /// Input-method composition: the pinyin being typed is drawn locally at
+    /// the caret, and it has to stay above SwiftTerm's caret view — that caret
+    /// is a filled block over the very cell the composition starts at, and
+    /// SwiftTerm re-adds it on top whenever the cursor comes back into view.
+    @MainActor
+    static func inputMethodChecks() {
+        let surface = TerminalSurface(
+            frame: NSRect(x: 0, y: 0, width: 600, height: 300),
+            font: NativeTheme.terminalFont(size: 13)
+        )
+        surface.layoutSubtreeIfNeeded()
+        surface.setMarkedText(
+            "ni" as NSString,
+            selectedRange: NSRange(location: 2, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        precondition(surface.hasMarkedText(), "the composition must be marked while typing")
+        guard let composition = surface.subviews.last as? NSTextField else {
+            preconditionFailure("the composition must be the topmost subview, above the caret block")
+        }
+        precondition(!composition.isHidden && composition.stringValue == "ni",
+                     "the composition must show what is being typed")
+        surface.unmarkText()
+        precondition(composition.isHidden, "committing or cancelling must take the preview away")
+    }
+
     /// Tabs pack to the left. The bar spans the window, and NSStackView's
     /// default gravity-area layout was free to leave a gap and park the newest
     /// tab at the far right; a second tab must start right after the first.
@@ -1031,7 +1067,7 @@ struct AppSmokeChecks {
             controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
-        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs and removed sync panel")
+        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, the input-method preview, a bar-free upload banner and removed sync panel")
         if ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_KEEP_OPEN"] == "1" {
             try await Task.sleep(nanoseconds: 120_000_000_000)
         }

@@ -51,7 +51,6 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
     private var uploadTasks: [UUID: Task<Void, Never>] = [:]
     private let uploadBanner = NSVisualEffectView()
     private let uploadLabel = NSTextField(labelWithString: "")
-    private let uploadBar = NSProgressIndicator()
 
     init(client: AgentboxClient, workspace: Workspace, project: RemoteProject, kind: TerminalKind = .agent) {
         self.client = client
@@ -302,6 +301,10 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
 
     /// A floating strip over the top of the terminal while files upload: what
     /// is going up, how far along it is, and a way to give up.
+    ///
+    /// The percentage is text only. A progress bar over the terminal was one
+    /// more moving thing covering the output for an upload that is usually over
+    /// before it can be read.
     private func buildUploadBanner() -> NSView {
         uploadBanner.material = .hudWindow
         uploadBanner.blendingMode = .withinWindow
@@ -315,11 +318,6 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         uploadLabel.textColor = .labelColor
         uploadLabel.lineBreakMode = .byTruncatingMiddle
         uploadLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        uploadBar.style = .bar
-        uploadBar.controlSize = .small
-        uploadBar.minValue = 0
-        uploadBar.maxValue = 1
-        uploadBar.isIndeterminate = false
         let hint = NSTextField(labelWithString: "继续输入的内容会在路径插入后接上")
         hint.font = .systemFont(ofSize: 10)
         hint.textColor = .secondaryLabelColor
@@ -327,7 +325,7 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         cancel.bezelStyle = .rounded
         cancel.controlSize = .small
 
-        let text = NSStackView(views: [uploadLabel, uploadBar, hint])
+        let text = NSStackView(views: [uploadLabel, hint])
         text.orientation = .vertical
         text.alignment = .leading
         text.spacing = 4
@@ -343,7 +341,6 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
             row.trailingAnchor.constraint(equalTo: uploadBanner.trailingAnchor),
             row.topAnchor.constraint(equalTo: uploadBanner.topAnchor),
             row.bottomAnchor.constraint(equalTo: uploadBanner.bottomAnchor),
-            uploadBar.widthAnchor.constraint(equalTo: text.widthAnchor),
         ])
         return uploadBanner
     }
@@ -351,7 +348,6 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
     private func showUpload(file: String, index: Int, count: Int, fraction: Double) {
         let position = count > 1 ? "（\(index)/\(count)）" : ""
         uploadLabel.stringValue = "正在上传 \(file)\(position) — \(Int((fraction * 100).rounded()))%"
-        uploadBar.doubleValue = fraction
         uploadBanner.isHidden = false
     }
 

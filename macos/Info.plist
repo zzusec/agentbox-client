@@ -19,9 +19,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2.16</string>
+	<string>0.2.17</string>
 	<key>CFBundleVersion</key>
-	<string>10</string>
+	<string>11</string>
 	<key>AgentboxUpdateRepository</key>
 	<string>zzusec/agentbox-client</string>
 	<key>LSMinimumSystemVersion</key>

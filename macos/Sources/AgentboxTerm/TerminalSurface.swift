@@ -187,6 +187,11 @@ final class TerminalSurface: TerminalView {
             width: min(width, maxWidth),
             height: max(caret.height, ceil(text.size().height))
         )
+        // SwiftTerm puts its caret view back on top whenever the cursor comes
+        // back into view, and the caret is a filled block over the very cell
+        // the composition starts at — raise the composition above it, or the
+        // first character being typed sits under the block.
+        addSubview(markedLabel, positioned: .above, relativeTo: nil)
         markedLabel.isHidden = false
     }
 
