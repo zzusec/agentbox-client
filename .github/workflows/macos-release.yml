@@ -1,0 +1,58 @@
+name: macOS client release
+
+# Builds the agentbox-client DMG/ZIP on a macOS runner — the app links AppKit
+# and is packaged with ditto/hdiutil, none of which exist on Linux — and,
+# when asked, publishes them as the GitHub release the in-app updater reads.
+# Manual on purpose: a release tag is the owner's decision, and tags pushed
+# by this workflow's token do not trigger release.yml.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version without the leading v, e.g. 0.2.9 (must match macos/Info.plist)
+        required: true
+      publish:
+        description: Create the GitHub release and upload the assets
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-14
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Version matches Info.plist
+        run: |
+          plist=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' macos/Info.plist)
+          test "$plist" = "$VERSION" || { echo "Info.plist is $plist, input is $VERSION"; exit 1; }
+      - name: Sync engine tests
+        run: go test ./internal/syncclient ./cmd/abox-sync
+      - name: App smoke checks
+        run: sh macos/scripts/test-app-smoke.sh
+      - name: Build DMG and ZIP
+        run: macos/scripts/release-app.sh "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentbox-client-macos-v${{ inputs.version }}
+          path: macos/dist/agentbox-client-macos-arm64-v${{ inputs.version }}.*
+          if-no-files-found: error
+      - name: Publish release
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          awk -v head="## macOS v$VERSION" 'index($0, head) == 1 {f=1; next} /^## /{f=0} f' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          test -s "$RUNNER_TEMP/notes.md" || echo "macOS v$VERSION" > "$RUNNER_TEMP/notes.md"
+          cd macos/dist
+          gh release create "v$VERSION" --target "$GITHUB_SHA" --title "macOS v$VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            "agentbox-client-macos-arm64-v$VERSION.dmg" "agentbox-client-macos-arm64-v$VERSION.dmg.sha256" \
+            "agentbox-client-macos-arm64-v$VERSION.zip" "agentbox-client-macos-arm64-v$VERSION.zip.sha256"

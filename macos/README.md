@@ -174,6 +174,12 @@ macos/dist/agentbox-client-macos-arm64-v0.2.9.dmg
 macos/dist/agentbox-client-macos-arm64-v0.2.9.dmg.sha256
 ```
 
+Without a Mac at hand, run the `macOS client release` workflow
+(`.github/workflows/macos-release.yml`, Actions → Run workflow) with the same
+version: it runs the sync tests and app smoke checks on a macOS runner, builds
+these four files and, unless `publish` is unchecked, creates the `v<version>`
+release with them attached. `macos/Info.plist` must already carry the version.
+
 The DMG includes an Applications shortcut for drag-to-install. The app is
 ad-hoc signed, not Developer ID signed or notarized.
 
