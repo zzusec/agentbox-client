@@ -21,6 +21,8 @@ export async function smoke(page) {
   const errors = [], writes = [], terminalURLs = [], filePaths = [];
   const claudeAccount = { id: 'fixture-account', type: 'claude', label: '开发账号', sessions: 2, cred_status: 'ok' };
   const codexAccount = { id: 'fixture-codex', type: 'codex', label: 'Codex 备用', sessions: 1, cred_status: 'ok' };
+  // One account, one instance: this one already belongs to an instance.
+  const takenAccount = { id: 'fixture-taken', type: 'claude', label: '已占用账号', sessions: 1, cred_status: 'ok', bound: true, bound_instance: '产品开发' };
   const residentialProxy = { id: 'fixture-proxy', name: '住宅出口', kind: 'residential' };
   const datacenterProxy = { id: 'fixture-dc', name: '机房出口', kind: 'datacenter' };
   const makeSession = (id, over) => ({
@@ -77,7 +79,7 @@ export async function smoke(page) {
     if (method !== 'GET') writes.push({ path, method, body: request.postDataJSON() });
     let body = {};
     if (path === '/api/me') body = { user: 'fixture', role: 'user', timezone: 'UTC', models: { claude: [], codex: [] }, quota: { metered: false } };
-    else if (path === '/api/accounts') body = [claudeAccount, codexAccount];
+    else if (path === '/api/accounts') body = [claudeAccount, codexAccount, takenAccount];
     // 普通用户可读的最小代理选项：只有 id/name/kind，没有地址或凭证。
     else if (path === '/api/instances/proxies') body = [residentialProxy, datacenterProxy];
     else if (path === '/api/instances/stats') {
@@ -304,6 +306,12 @@ export async function smoke(page) {
     await page.locator('#new-error').waitFor({ state: 'visible' });
     assert.match(await page.locator('#new-error').innerText(), /至少绑定一个账号/);
     assert.equal(writes.length, writesBeforeCreate, 'incomplete instance must not be submitted');
+    // 已被其他实例占用的账号列出但不可选，并说明占用者。
+    await page.locator('#new-account-claude + .select-trigger').click();
+    const taken = page.locator('.select-panel:popover-open [role=option]').filter({ hasText: '已占用账号' });
+    assert.equal(await taken.getAttribute('aria-disabled'), 'true', 'a bound account must not be selectable');
+    assert.match(await taken.innerText(), /已绑定：产品开发/);
+    await page.keyboard.press('Escape');
     // 只勾 Codex 账号：默认工具跟着变成 Codex，代理仍然必填。
     await choose('new-account-codex', 'Codex 备用');
     assert.match(await page.locator('#new-default-agent + .select-trigger').innerText(), /Codex CLI/);

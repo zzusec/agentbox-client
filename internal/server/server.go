@@ -648,14 +648,20 @@ type acctView struct {
 	Type           string                                `json:"type"`
 	Label          string                                `json:"label"`
 	Sessions       int                                   `json:"sessions"`
-	CredStatus     string                                `json:"cred_status"`          // ok | norefresh | missing
-	ExpiresAt      int64                                 `json:"expires_at,omitempty"` // claude access token 到期(ms)
-	AuthMode       string                                `json:"auth_mode,omitempty"`  // oauth | apikey
-	BaseURL        string                                `json:"base_url,omitempty"`   // 中转站地址（codex 读 config.toml，claude 读 env）
-	WireAPI        string                                `json:"wire_api,omitempty"`   // codex：responses | chat
-	Env            map[string]string                     `json:"env,omitempty"`
-	ProxyID        string                                `json:"proxy_id,omitempty"` // 绑定的出口 IP 代理
-	ProxyLabel     string                                `json:"proxy_label,omitempty"`
+	// BoundInstance names the instance holding this account (one account,
+	// one instance). Bound is set whenever any instance holds it; the name is
+	// only filled for an admin or the instance's owner.
+	Bound          bool              `json:"bound"`
+	BoundInstance  string            `json:"bound_instance,omitempty"`
+	BoundSessionID string            `json:"bound_session_id,omitempty"`
+	CredStatus     string            `json:"cred_status"`          // ok | norefresh | missing
+	ExpiresAt      int64             `json:"expires_at,omitempty"` // claude access token 到期(ms)
+	AuthMode       string            `json:"auth_mode,omitempty"`  // oauth | apikey
+	BaseURL        string            `json:"base_url,omitempty"`   // 中转站地址（codex 读 config.toml，claude 读 env）
+	WireAPI        string            `json:"wire_api,omitempty"`   // codex：responses | chat
+	Env            map[string]string `json:"env,omitempty"`
+	ProxyID        string            `json:"proxy_id,omitempty"` // 绑定的出口 IP 代理
+	ProxyLabel     string            `json:"proxy_label,omitempty"`
 }
 
 func (s *Server) accountView(a config.Account, sessions int) acctView {
@@ -814,12 +820,19 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	bindings := s.accountBindings()
 	out := []acctView{}
 	for _, a := range s.cfg.AccountList() {
 		if !a.CanUse(reqUser(r).Name, isAdmin) {
 			continue
 		}
 		v := s.accountView(a, counts[a.ID])
+		if holder, bound := bindings[a.ID]; bound {
+			v.Bound = true
+			if isAdmin || holder.User == reqUser(r).Name {
+				v.BoundInstance, v.BoundSessionID = holder.Name, holder.ID
+			}
+		}
 		if !isAdmin {
 			// 普通用户建会话只需要账号列表本身，env/base_url 里可能有密钥，
 			// 出口 IP 也属于运维信息，一并摘掉。

@@ -125,6 +125,11 @@ export interface Account {
   label: string;
   /** 正在使用该账号的会话数 */
   sessions: number;
+  /** 一个账号只能绑定一个实例：已被某个实例占用 */
+  bound?: boolean;
+  /** 占用它的实例名；仅管理员或该实例的属主可见 */
+  bound_instance?: string;
+  bound_session_id?: string;
   /** "ok" | "norefresh" | "missing" */
   cred_status: string;
   /** claude access token 到期时间(ms) */

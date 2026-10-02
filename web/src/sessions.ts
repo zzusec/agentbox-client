@@ -321,10 +321,15 @@ function accountOptionsFor(tool: "claude" | "codex") {
 function fillOptionalAccountSelect(id: string, tool: "claude" | "codex") {
   const select = $<HTMLSelectElement>(id);
   select.replaceChildren(Object.assign(document.createElement("option"), { value: "", textContent: "不绑定" }));
+  // 一个账号只能绑定一个实例：已被占用的列出来但不可选，并说明被谁占用。
   for (const account of accountOptionsFor(tool)) {
+    const taken = !!account.bound;
     select.append(Object.assign(document.createElement("option"), {
       value: account.id,
-      textContent: `${account.label}（${account.sessions} 个实例在用）`,
+      disabled: taken,
+      textContent: taken
+        ? `${account.label}（${account.bound_instance ? "已绑定：" + account.bound_instance : "已被其他实例占用"}）`
+        : account.label,
     }));
   }
   if (!accountOptionsFor(tool).length) {
@@ -353,11 +358,14 @@ function fillNewInstanceForm() {
   fillOptionalAccountSelect("new-account-codex", "codex");
   fillDefaultAgentSelect();
   const submit = $<HTMLButtonElement>("new-ok");
-  const anyAccount = accountOptionsFor("claude").length + accountOptionsFor("codex").length;
-  submit.disabled = !anyAccount;
-  $("new-account-hint").textContent = anyAccount
-    ? "至少绑定一个账号；只有绑定过的工具才能出现在项目的开发工具里。"
-    : "账号池里还没有你能使用的账号，请先在系统设置里添加。";
+  const all = [...accountOptionsFor("claude"), ...accountOptionsFor("codex")];
+  const free = all.filter(account => !account.bound).length;
+  submit.disabled = !free;
+  $("new-account-hint").textContent = !all.length
+    ? "账号池里还没有你能使用的账号，请先在系统设置里添加。"
+    : !free
+      ? "所有账号都已绑定到实例（一个账号只能绑定一个实例），请先在系统设置里添加新账号。"
+      : "至少绑定一个账号；一个账号只能绑定一个实例，只有绑定过的工具才能出现在项目的开发工具里。";
 }
 
 /* 侧栏字标 = 首页入口：放下当前会话回到空状态（只断前端通道，容器不动） */

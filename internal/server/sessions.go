@@ -242,6 +242,11 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	instanceBindMu.Lock()
+	defer instanceBindMu.Unlock()
+	if !s.requireAccountsFree(w, r, "", claudeID, codexID) {
+		return
+	}
 	proxyID, ok := s.resolveInstanceProxy(w, req.ProxyID)
 	if !ok {
 		return
@@ -413,6 +418,20 @@ func (s *Server) patchInstance(w http.ResponseWriter, r *http.Request, sess stor
 			return
 		}
 		defaultAgent = resolved
+		// Only a newly attached account is checked: an instance that already
+		// shares one from before the rule can still change its proxy or name.
+		var added []string
+		if claudeID != sess.AccountForTool(config.AgentClaude) {
+			added = append(added, claudeID)
+		}
+		if codexID != sess.AccountForTool(config.AgentCodex) {
+			added = append(added, codexID)
+		}
+		instanceBindMu.Lock()
+		defer instanceBindMu.Unlock()
+		if !s.requireAccountsFree(w, r, sess.ID, added...) {
+			return
+		}
 	}
 	if req.DefaultAgent != nil {
 		v := strings.TrimSpace(*req.DefaultAgent)
