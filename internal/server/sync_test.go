@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -196,5 +197,65 @@ func TestSyncFileDownloadIsOpaque(t *testing.T) {
 	}
 	if got := rec.Header().Get("Cache-Control"); !strings.Contains(got, "no-transform") {
 		t.Fatalf("cache-control = %q", got)
+	}
+}
+
+// TestSyncDirectoryKeepsItsModeUnderAUmask pins the fix for a sync that never
+// settled: the unit runs with UMask=0077, MkdirAll applies it, so a directory
+// uploaded as 0755 landed as 0700. The manifest then reported 0700, the client
+// saw a difference no transfer could fix, and the project's whole directory
+// tree was re-uploaded on every pass.
+func TestSyncDirectoryKeepsItsModeUnderAUmask(t *testing.T) {
+	old := syscall.Umask(0o077)
+	defer syscall.Umask(old)
+
+	s, sess := newTestServer(t)
+	project := syncTestProject(t, s, sess)
+	leaseReq := accessRequest(sess.User, http.MethodPost, "/lease", `{"device_id":"mac-a","device_name":"Mac A"}`)
+	leaseReq.SetPathValue("project", project.ID)
+	leaseRecorder := httptest.NewRecorder()
+	s.handleSyncLease(leaseRecorder, leaseReq)
+	if leaseRecorder.Code != http.StatusOK {
+		t.Fatalf("lease status = %d body=%s", leaseRecorder.Code, leaseRecorder.Body.String())
+	}
+	var lease store.SyncLease
+	if err := json.Unmarshal(leaseRecorder.Body.Bytes(), &lease); err != nil {
+		t.Fatal(err)
+	}
+
+	putReq := accessRequest(sess.User, http.MethodPut, "/file?path=sub/deep", "")
+	putReq.SetPathValue("project", project.ID)
+	putReq.Header.Set(syncLeaseHeader, lease.LeaseID)
+	putReq.Header.Set(syncDeviceHeader, lease.DeviceID)
+	putReq.Header.Set(syncKindHeader, "dir")
+	putReq.Header.Set(syncFileModeHeader, "0755")
+	putRecorder := httptest.NewRecorder()
+	s.handleSyncFile(putRecorder, putReq)
+	if putRecorder.Code != http.StatusOK {
+		t.Fatalf("put status = %d body=%s", putRecorder.Code, putRecorder.Body.String())
+	}
+
+	info, err := os.Stat(filepath.Join(s.workspaceDir(sess), "alpha", "sub", "deep"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("directory mode = %v, want 0755 (the umask must not strip it)", info.Mode().Perm())
+	}
+
+	// And the manifest has to report the same mode back, since that is what the
+	// client compares against.
+	manifestReq := accessRequest(sess.User, http.MethodGet, "/manifest", "")
+	manifestReq.SetPathValue("project", project.ID)
+	manifestRecorder := httptest.NewRecorder()
+	s.handleSyncManifest(manifestRecorder, manifestReq)
+	var manifest syncManifest
+	if err := json.Unmarshal(manifestRecorder.Body.Bytes(), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range manifest.Entries {
+		if entry.Path == "sub/deep" && entry.Mode != 0o755 {
+			t.Fatalf("manifest reports %o for the directory, want 755", entry.Mode)
+		}
 	}
 }

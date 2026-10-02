@@ -42,6 +42,11 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     /// project sync looked like it had stopped. An upload is shown on top for
     /// its own duration and then hands the bar back to the engine.
     private var engineStatus = StatusLine()
+    /// The newest line per project, so the bar can report the project in front
+    /// rather than whichever one the engine happened to touch last.
+    private var projectStatus: [String: StatusLine] = [:]
+    /// The project of the tab in front.
+    private var focusedProject: String?
     private var uploadStatus: StatusLine?
     private var uploadHold: DispatchWorkItem?
     /// How long a finished upload stays up before the engine's line returns.
@@ -210,7 +215,11 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     ///   for a determinate bar so a download or upload reads as a real
     ///   percentage. Nil means "busy but not counting yet"; busy=false is the
     ///   finished state, where neither indicator stays up.
+    /// A workspace-wide line (started, stopped, no local directory, a forced
+    /// pass). It supersedes the per-project lines, which are about one project
+    /// each and would otherwise keep covering it.
     func showSyncStatus(_ message: String, busy: Bool = false, progress: Double? = nil) {
+        projectStatus.removeAll()
         engineStatus = StatusLine(
             text: message.trimmingCharacters(in: .whitespacesAndNewlines),
             busy: busy,
@@ -221,7 +230,10 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
 
     /// Paints whichever job owns the bar right now.
     private func renderStatus() {
-        let line = uploadStatus ?? engineStatus
+        // An upload borrows the bar; otherwise it reports the project in front,
+        // falling back to the engine's own workspace-wide line.
+        let focused = focusedProject.flatMap { projectStatus[$0] }
+        let line = uploadStatus ?? focused ?? engineStatus
         let text = line.text
         let busy = line.busy
         let progress = line.progress
@@ -256,16 +268,20 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
-        // Progress lines look like "项目: 45/820 (5%)".
+        // Progress lines look like "项目: 45/820 (5%)". These come from the
+        // engine's own log, so they update the engine line but leave the
+        // per-project lines alone — the bar prefers the project in front.
         if let counts = parseSyncCounts(text), counts.total > 0 {
-            showSyncStatus(text, busy: true, progress: Double(counts.done) / Double(counts.total))
+            engineStatus = StatusLine(text: text, busy: true, progress: Double(counts.done) / Double(counts.total))
+            renderStatus()
             return
         }
 
         // A verdict line: mark the finish so it is unmistakable next to the
         // moving bar it replaces.
         let settled = text.contains("同步完成") || text.contains("无需同步") || text.contains("已是最新")
-        showSyncStatus(settled ? "✓ \(text)" : text, busy: false)
+        engineStatus = StatusLine(text: settled ? "✓ \(text)" : text, busy: false)
+        renderStatus()
     }
 
     /// Routes one structured event from the watcher. Progress drives the bar,
@@ -282,11 +298,11 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
                 let percent = Int(progress.percent.rounded())
                 // The project goes first: a workspace syncs several of them and
                 // the line is otherwise about no one in particular.
-                showSyncStatus(
-                    "\(progress.project) · \(SyncEvent.phaseLabel(progress.phase))\(path) — \(progress.index)/\(progress.total) · \(percent)%",
+                setProjectStatus(progress.project, StatusLine(
+                    text: "\(progress.project) · \(SyncEvent.phaseLabel(progress.phase))\(path) — \(progress.index)/\(progress.total) · \(percent)%",
                     busy: true,
                     progress: progress.percent / 100
-                )
+                ))
             }
             refreshSyncIndicator()
         case let .transfer(transfer):
@@ -298,11 +314,11 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             }
             // Keep the bar moving if more of the plan is still to come.
             let inFlight = activeTransfers[transfer.project]
-            showSyncStatus(
-                "\(transfer.project) · \(line)",
+            setProjectStatus(transfer.project, StatusLine(
+                text: "\(transfer.project) · \(line)",
                 busy: inFlight != nil,
                 progress: inFlight.map { $0.percent / 100 }
-            )
+            ))
             refreshTransferTooltip()
         case let .status(status):
             projectSyncStatus[status.project] = status
@@ -310,12 +326,20 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             if status.applied > 0, status.inSync {
                 let took = SyncFormat.duration(milliseconds: status.durationMS)
                 let last = lastTransferLine.map { "  ·  最近：\($0)" } ?? ""
-                showSyncStatus("✓ \(status.project)：同步了 \(status.applied) 个变更，用时 \(took)\(last)", busy: false)
+                setProjectStatus(status.project, StatusLine(
+                    text: "✓ \(status.project)：同步了 \(status.applied) 个变更，用时 \(took)\(last)", busy: false
+                ))
             } else if let error = status.error, !error.isEmpty {
-                showSyncStatus("\(status.project)：\(error)", busy: false)
-            } else if isSyncing {
+                setProjectStatus(status.project, StatusLine(text: "\(status.project)：\(error)", busy: false))
+            } else if var settledLine = projectStatus[status.project], settledLine.busy {
                 // Settled with nothing applied: stop the spinner, keep the text.
-                showSyncStatus(syncStatusText, busy: false)
+                settledLine.busy = false
+                settledLine.progress = nil
+                setProjectStatus(status.project, settledLine)
+            } else if engineStatus.busy, focusedProject == nil || focusedProject == status.project {
+                engineStatus.busy = false
+                engineStatus.progress = nil
+                renderStatus()
             }
             syncCheckedLabel.stringValue = "核对于 \(Self.clockFormatter.string(from: Date())) · \(SyncFormat.duration(milliseconds: status.durationMS))"
             syncCheckedLabel.isHidden = false
@@ -348,6 +372,18 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         case let .failed(message):
             showUploadStatus(StatusLine(text: "上传失败：\(file)：\(message)", busy: false), holding: true)
         }
+    }
+
+    private func setProjectStatus(_ project: String, _ line: StatusLine) {
+        projectStatus[project] = line
+        renderStatus()
+    }
+
+    /// Follows the tab in front, so the bar reports that project's sync.
+    private func focus(project: String?) {
+        guard focusedProject != project else { return }
+        focusedProject = project
+        renderStatus()
     }
 
     /// An upload borrows the bar. `holding` means it is over: the line stays up
@@ -540,6 +576,9 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         sidebar.onOpenProject = { [weak self] project in
             self?.open(project)
         }
+        terminalGrid.onSelectTerminal = { [weak self] terminal in
+            self?.focus(project: terminal.project.name)
+        }
         sidebar.onCopyProjectPath = { project in
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(project.path, forType: .string)
@@ -634,6 +673,8 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             showSyncStatus("未配置本地同步目录：点侧栏「选择目录」后开始同步")
         }
         sidebar.setProjects([])
+        focus(project: nil)
+        projectStatus.removeAll()
         sidebar.setStatus("正在读取项目…")
         Task { @MainActor in
             do {

@@ -7,6 +7,9 @@ final class TerminalGridViewController: NSViewController {
     /// A tab was closed; the owner must forget it so the project can be
     /// reopened from the sidebar.
     var onPaneClosed: ((TerminalViewController) -> Void)?
+    /// The tab in front changed; the owner follows it (the status bar reports
+    /// that project's sync).
+    var onSelectTerminal: ((TerminalViewController) -> Void)?
     /// Asks for another shell next to an existing tab: double-clicking the
     /// empty part of the tab bar, or "新开终端" on a tab.
     var onNewShell: ((TerminalViewController) -> Void)?
@@ -140,6 +143,7 @@ final class TerminalGridViewController: NSViewController {
     func select(_ terminal: TerminalViewController) {
         guard terminals.contains(where: { $0 === terminal }) else { return }
         if selected === terminal, terminal.view.superview === container {
+            onSelectTerminal?(terminal)
             terminal.activateTerminal()
             return
         }
@@ -158,6 +162,7 @@ final class TerminalGridViewController: NSViewController {
         rebuildTabs()
         updateEmptyState()
         view.window?.title = terminal.tabTitle
+        onSelectTerminal?(terminal)
         terminal.refitPTY()
         terminal.activateTerminal()
     }

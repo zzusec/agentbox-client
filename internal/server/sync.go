@@ -423,6 +423,15 @@ func (s *Server) putSyncFile(w http.ResponseWriter, r *http.Request, root *safef
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		// MkdirAll's mode goes through the process umask, and the unit sets
+		// UMask=0077: a directory the client sent as 0755 landed as 0700, the
+		// manifest reported 0700 back, and the client saw a difference it could
+		// never resolve — every pass re-uploaded the project's whole directory
+		// tree, forever. chmod is not subject to the umask.
+		if err := root.ChmodDir(rel, mode); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		_ = root.Chown(rel, dockerx.AgentUID, dockerx.AgentGID)
 		writeJSON(w, http.StatusOK, map[string]any{"path": rel, "kind": "dir", "mode": mode.Perm()})
 		return

@@ -1062,6 +1062,7 @@ struct AppSmokeChecks {
         precondition(controller.syncStatusText == "demo: 40/100" && controller.isSyncing,
                      "the bar must go back to the sync engine's own line, still busy")
         MainViewController.uploadHoldSeconds = 3
+
         controller.showSyncStatus("", busy: false)
         let window = NSWindow(contentViewController: controller)
         window.title = "Agentbox App regression — synthetic data"
@@ -1098,6 +1099,25 @@ struct AppSmokeChecks {
         try await Task.sleep(nanoseconds: 150_000_000)
         precondition(table.numberOfRows == 1, "Stale failure cleared current workspace projects")
         precondition(!views(in: sidebar.view).compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("Synthetic stale failure") })
+
+        // The bar follows the project in front. Two projects sync at once; the
+        // line must be the focused one's, not whichever event arrived last.
+        func progressEvent(_ project: String, _ index: Int) -> SyncEvent {
+            let json = """
+            {"type":"progress","project":"\(project)","phase":"upload","path":"a.txt","index":\(index),"total":10,"bytes":1,"total_bytes":10,"percent":\(index * 10)}
+            """
+            return SyncEvent.decode(Data(json.utf8))!
+        }
+        let grid = controller.children.compactMap { $0 as? TerminalGridViewController }.first!
+        let focusedTab = grid.add(
+            client: client, workspace: beta,
+            project: RemoteProject(id: "p-focus", name: "focused", path: "/w/focused")
+        )
+        precondition(focusedTab.project.name == "focused")
+        controller.handleSyncEvent(progressEvent("focused", 3))
+        controller.handleSyncEvent(progressEvent("other", 7))
+        precondition(controller.syncStatusText.hasPrefix("focused ·"),
+                     "the bar must stay on the project in front: \(controller.syncStatusText)")
 
         // The sidebar's server clock: it must show the server's time (the
         // fixture's, three hours from the runner's), and a passing status

@@ -65,3 +65,26 @@ func TestBuildLocalManifestExcludesGitAndHashesFiles(t *testing.T) {
 		t.Fatalf("sha = %s", manifest.Entries[0].SHA256)
 	}
 }
+
+// TestEqualEntryIgnoresDirectoryMode pins the comparison that made a project
+// re-upload its whole directory tree on every pass: the server creates
+// directories under a umask (the unit sets 0077), so a directory sent as 0755
+// came back as 0700 and never matched. Nothing can be transferred to fix that,
+// so the mode of a directory is not part of the comparison.
+func TestEqualEntryIgnoresDirectoryMode(t *testing.T) {
+	local := Entry{Path: "src", Kind: "dir", Mode: 0o755}
+	remote := Entry{Path: "src", Kind: "dir", Mode: 0o700}
+	if !equalEntry(local, true, remote, true) {
+		t.Fatal("a directory whose mode the server changed must still count as equal")
+	}
+	// Files keep comparing by mode: that one does round-trip.
+	localFile := Entry{Path: "run.sh", Kind: "file", Mode: 0o755, SHA256: "abc"}
+	remoteFile := Entry{Path: "run.sh", Kind: "file", Mode: 0o644, SHA256: "abc"}
+	if equalEntry(localFile, true, remoteFile, true) {
+		t.Fatal("a file's mode must still be compared")
+	}
+	// And a directory that differs in kind is still a difference.
+	if equalEntry(local, true, Entry{Path: "src", Kind: "file", Mode: 0o755}, true) {
+		t.Fatal("kind must still be compared")
+	}
+}

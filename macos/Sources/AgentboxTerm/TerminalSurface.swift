@@ -22,6 +22,13 @@ final class TerminalSurface: TerminalView {
     }
 
     private func commonInit() {
+        // Repaint the whole view on any change, which is what macOS does by
+        // default: SwiftTerm opts out of that on Big Sur and newer so draw()
+        // only gets the rows the terminal marked dirty. Everything else keeps
+        // the pixels it had, and the leftovers of a wider earlier frame — a
+        // full-width rule, a status block — stayed stranded on screen next to
+        // the content that replaced them. Correctness over the saved drawing.
+        disableFullRedrawOnAnyChanges = false
         applyMouseMode()
         registerForDraggedTypes([.fileURL])
         installContextMenu()

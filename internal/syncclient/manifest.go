@@ -277,9 +277,19 @@ func equalEntry(left Entry, leftOK bool, right Entry, rightOK bool) bool {
 	if !leftOK {
 		return true
 	}
-	return left.Kind == right.Kind &&
-		left.Size == right.Size &&
-		left.Mode == right.Mode &&
+	if left.Kind != right.Kind {
+		return false
+	}
+	// A directory's permissions are not content, and the two sides cannot be
+	// made to agree by transferring anything: a umask, a different platform or
+	// an older server can always hand back a mode the client did not ask for,
+	// and comparing it then yields an action that changes nothing and comes
+	// back on the next pass. Files and symlinks still compare by mode, which
+	// does round-trip.
+	if left.Kind != "dir" && left.Mode != right.Mode {
+		return false
+	}
+	return left.Size == right.Size &&
 		left.SHA256 == right.SHA256 &&
 		left.LinkTarget == right.LinkTarget
 }
