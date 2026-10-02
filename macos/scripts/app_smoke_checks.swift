@@ -955,11 +955,19 @@ struct AppSmokeChecks {
 
         // A resize has to repaint the whole surface: SwiftTerm invalidates only
         // the rows the terminal marked dirty, so the strip a widening view
-        // uncovers would otherwise keep the pixels of an older frame.
+        // uncovers would otherwise keep the pixels of an older frame. The
+        // surface needs a window for this: AppKit drops invalidations made on a
+        // view that has nowhere to draw.
+        let host = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 300),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        host.contentView = surface
         surface.displayIfNeeded()
         precondition(!surface.needsDisplay, "nothing should be pending before the resize")
         surface.setFrameSize(NSSize(width: 800, height: 400))
         precondition(surface.needsDisplay, "a resize must mark the whole surface for redraw")
+        host.contentView = NSView()
     }
 
     /// Tabs pack to the left. The bar spans the window, and NSStackView's
@@ -1008,6 +1016,25 @@ struct AppSmokeChecks {
         precondition(controller.syncStatusText == "demo: applied 12 changes")
         controller.handleSyncOutput("   ")
         precondition(controller.syncStatusText == "demo: applied 12 changes", "blank output must be ignored")
+        // An upload borrows the bar and then hands it back: a drop in one tab
+        // must not leave the project's own sync looking stopped.
+        MainViewController.uploadHoldSeconds = 0.05
+        controller.showSyncStatus("demo: 40/100", busy: true, progress: 0.4)
+        func uploadNote(_ state: UploadProgressNote.State) -> Notification {
+            Notification(
+                name: UploadProgressNote.name,
+                object: nil,
+                userInfo: ["file": "a.png", "project": "demo", "state": state]
+            )
+        }
+        controller.handleUploadNote(uploadNote(.running(fraction: 0.5)))
+        precondition(controller.syncStatusText.contains("上传 a.png"), "an upload must show while it runs")
+        controller.handleUploadNote(uploadNote(.finished(bytes: 10, milliseconds: 20)))
+        precondition(controller.syncStatusText.contains("✓"), "a finished upload is shown briefly")
+        try await Task.sleep(nanoseconds: 300_000_000)
+        precondition(controller.syncStatusText == "demo: 40/100" && controller.isSyncing,
+                     "the bar must go back to the sync engine's own line, still busy")
+        MainViewController.uploadHoldSeconds = 3
         controller.showSyncStatus("", busy: false)
         let window = NSWindow(contentViewController: controller)
         window.title = "Agentbox App regression — synthetic data"

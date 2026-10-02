@@ -21,11 +21,31 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     /// spinner.
     private let syncBar = NSProgressIndicator()
     private let syncStatusLabel = NSTextField(labelWithString: "")
+    /// Stops a transfer in flight, or starts the whole pass again.
+    private let syncControl = NSButton(title: "重新同步", target: nil, action: nil)
     /// What the bottom bar currently says, and whether a sync is in flight.
     private(set) var syncStatusText = ""
     private(set) var isSyncing = false
     /// 0...1 when the engine is reporting counts, nil when it is not.
     private(set) var syncFraction: Double?
+
+    /// One line, from one job.
+    struct StatusLine {
+        var text = ""
+        var busy = false
+        var progress: Double?
+    }
+
+    /// The bar carries two independent jobs: the project's sync engine, and
+    /// whatever a terminal tab is uploading. They are kept apart because a drop
+    /// in one tab used to take the line over and then clear it — the running
+    /// project sync looked like it had stopped. An upload is shown on top for
+    /// its own duration and then hands the bar back to the engine.
+    private var engineStatus = StatusLine()
+    private var uploadStatus: StatusLine?
+    private var uploadHold: DispatchWorkItem?
+    /// How long a finished upload stays up before the engine's line returns.
+    static var uploadHoldSeconds: TimeInterval = 3
 
     /// Left end of the bar: are both sides identical right now?
     private let syncStateDot = NSView()
@@ -148,8 +168,16 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         syncCheckedLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         syncCheckedLabel.isHidden = true
 
+        syncControl.bezelStyle = .rounded
+        syncControl.controlSize = .small
+        syncControl.font = .systemFont(ofSize: 11)
+        syncControl.target = self
+        syncControl.action = #selector(toggleSync)
+        syncControl.isHidden = true
+        syncControl.setContentCompressionResistancePriority(.required, for: .horizontal)
+
         let content = NSStackView(views: [
-            syncStateDot, syncStateLabel, syncSpinner, syncBar, syncStatusLabel, syncCheckedLabel,
+            syncStateDot, syncStateLabel, syncSpinner, syncBar, syncStatusLabel, syncControl, syncCheckedLabel,
         ])
         content.orientation = .horizontal
         content.spacing = 8
@@ -183,7 +211,20 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     ///   percentage. Nil means "busy but not counting yet"; busy=false is the
     ///   finished state, where neither indicator stays up.
     func showSyncStatus(_ message: String, busy: Bool = false, progress: Double? = nil) {
-        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        engineStatus = StatusLine(
+            text: message.trimmingCharacters(in: .whitespacesAndNewlines),
+            busy: busy,
+            progress: progress
+        )
+        renderStatus()
+    }
+
+    /// Paints whichever job owns the bar right now.
+    private func renderStatus() {
+        let line = uploadStatus ?? engineStatus
+        let text = line.text
+        let busy = line.busy
+        let progress = line.progress
         syncStatusLabel.stringValue = text
         if recentTransfers.isEmpty {
             syncStatusLabel.toolTip = text.isEmpty ? nil : "\(text)\n日志：\(SyncManager.logURL.path)"
@@ -191,6 +232,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         syncStatusText = text
         isSyncing = busy
         syncFraction = progress
+        refreshSyncControl()
 
         if let progress {
             syncSpinner.stopAnimation(nil)
@@ -285,17 +327,68 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         switch decoded.state {
         case let .running(fraction):
             let percent = Int((fraction * 100).rounded())
-            showSyncStatus("↑ 上传 \(file) 到 \(project) — \(percent)%", busy: true, progress: fraction)
+            showUploadStatus(
+                StatusLine(text: "↑ 上传 \(file) 到 \(project) — \(percent)%", busy: true, progress: fraction),
+                holding: false
+            )
         case let .finished(bytes, milliseconds):
             var parts = ["↑ 上传 \(file)"]
             if bytes > 0 { parts.append(SyncFormat.bytes(bytes)) }
             parts.append(SyncFormat.duration(milliseconds: milliseconds))
             let line = parts.joined(separator: " · ")
             recentTransfers.insert("\(Self.clockFormatter.string(from: Date()))  \(project)  \(line)", at: 0)
-            showSyncStatus("✓ \(line)", busy: false)
+            showUploadStatus(StatusLine(text: "✓ \(line)", busy: false), holding: true)
             refreshTransferTooltip()
         case let .failed(message):
-            showSyncStatus("上传失败：\(file)：\(message)", busy: false)
+            showUploadStatus(StatusLine(text: "上传失败：\(file)：\(message)", busy: false), holding: true)
+        }
+    }
+
+    /// An upload borrows the bar. `holding` means it is over: the line stays up
+    /// briefly and then the engine's own state comes back, instead of leaving
+    /// the bar claiming the project sync is finished.
+    private func showUploadStatus(_ line: StatusLine, holding: Bool) {
+        uploadHold?.cancel()
+        uploadHold = nil
+        uploadStatus = line
+        renderStatus()
+        guard holding else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.uploadStatus = nil
+            self.uploadHold = nil
+            self.renderStatus()
+        }
+        uploadHold = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.uploadHoldSeconds, execute: work)
+    }
+
+    /// 终止 while a transfer is running, 重新同步 the rest of the time. Hidden
+    /// until a workspace with a local directory is in front, since there is
+    /// nothing to stop or restart before that.
+    private func refreshSyncControl() {
+        guard let workspace, let root = UserDefaults.standard.string(forKey: localRootKey(workspace)), !root.isEmpty else {
+            syncControl.isHidden = true
+            return
+        }
+        syncControl.isHidden = false
+        syncControl.title = engineStatus.busy ? "终止" : "重新同步"
+    }
+
+    @objc private func toggleSync() {
+        guard let workspace,
+              let root = UserDefaults.standard.string(forKey: localRootKey(workspace)), !root.isEmpty else { return }
+        if engineStatus.busy {
+            // Stopping the watcher aborts the transfer in flight; the files
+            // already sent stay, and 重新同步 picks the rest up.
+            syncManager?.stop()
+            syncManager = nil
+            activeTransfers.removeAll()
+            refreshSyncIndicator()
+            showSyncStatus("同步已终止——点「重新同步」继续", busy: false)
+        } else {
+            startSync(workspace, localRoot: URL(fileURLWithPath: root, isDirectory: true))
+            showSyncStatus("正在重新同步…", busy: true)
         }
     }
 
