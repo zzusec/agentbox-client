@@ -21,11 +21,19 @@ permissions:
 
 jobs:
   dmg:
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v4
+      # The sources use Swift 6.1 syntax (trailing commas in parameter lists),
+      # so pick the newest Xcode on the image rather than its default.
+      - name: Select newest Xcode
+        run: |
+          latest=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          sudo xcode-select -s "$latest"
+          xcodebuild -version
+          swift --version
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
