@@ -404,7 +404,10 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request, sess store
 				}
 			}
 			if err != nil {
-				if shuttingDown.Load() {
+				// s.stopping() covers the window between Close starting and
+				// this connection's closer running: the PTY can end in there,
+				// and reporting 1000 then would stop the client reconnecting.
+				if shuttingDown.Load() || s.stopping() {
 					return
 				}
 				conn.SetWriteDeadline(time.Now().Add(wsWriteWait))

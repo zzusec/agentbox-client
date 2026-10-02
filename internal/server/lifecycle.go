@@ -36,6 +36,16 @@ func (s *Server) runtime() *runtimeState {
 
 func (s *Server) workContext() context.Context { return s.runtime().ctx }
 
+// stopping reports whether Close has begun. A connection whose output ends
+// during shutdown says so with 1012; without this it could not tell a real
+// "the process exited" from the server pulling the floor out.
+func (s *Server) stopping() bool {
+	l := s.runtime()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.stopping
+}
+
 func (l *runtimeState) begin() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -103,7 +113,12 @@ func (s *Server) Close(ctx context.Context) error {
 				s.chat.interruptAll(interruptCtx)
 				cancel()
 			}
-			l.cancel()
+			// Close tracked connections before cancelling, not after. Every
+			// request context is wired to l.ctx by admit, so cancelling first
+			// tears a terminal's Docker exec down and its PTY reader reports a
+			// clean "process exited" (1000) microseconds before the closer can
+			// send 1012 — and 1000 is precisely the code clients must not
+			// reconnect on, so each restart left terminals dead again.
 			l.mu.Lock()
 			resources := l.resources
 			l.resources = map[*resource]struct{}{}
@@ -111,6 +126,7 @@ func (s *Server) Close(ctx context.Context) error {
 			for r := range resources {
 				r.close()
 			}
+			l.cancel()
 			if s.tunnels != nil {
 				s.tunnels.closeAll()
 			}

@@ -217,3 +217,29 @@ func TestShutdownAllowsProtocolInterruptToFinishBeforeCancellation(t *testing.T)
 		t.Fatalf("stream canceled before protocol interrupt could settle: %v", err)
 	}
 }
+
+// TestShutdownClosesConnectionsBeforeCancellingTheirContexts pins the order a
+// terminal's 1012 close depends on. admit ties every request context to the
+// lifecycle context, so cancelling before the tracked closers run ends the
+// Docker exec first: the PTY reader then reports a clean 1000 "process exited"
+// and clients deliberately do not reconnect, which is what left every terminal
+// dead across a deploy.
+func TestShutdownClosesConnectionsBeforeCancellingTheirContexts(t *testing.T) {
+	s, _ := newTestServer(t)
+	cancelled := make(chan bool, 1)
+	_, ok := s.track(func() {
+		select {
+		case <-s.workContext().Done():
+			cancelled <- true
+		default:
+			cancelled <- false
+		}
+	})
+	if !ok {
+		t.Fatal("track refused on a running server")
+	}
+	closeTestServer(t, s)
+	if <-cancelled {
+		t.Fatal("work context cancelled before tracked connections were closed")
+	}
+}
