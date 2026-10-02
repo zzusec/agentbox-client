@@ -8,7 +8,7 @@
  * 剩余额度（服务端 /me 下发，没开额度就不显示这一条）。 */
 "use strict";
 import { S, bus } from "./state.js";
-import { $, toast, btnBusy, btnDone, askConfirm } from "./util.js";
+import { $, toast, btnBusy, btnDone, askConfirm, fmtTime } from "./util.js";
 import { api } from "./api.js";
 import { setTip } from "./tip.js";
 /* 微美元 → 给人看的金额。默认四位小数：一个便宜回合只有几百微美元，
@@ -137,9 +137,7 @@ function ledgerRow(e) {
     row.className = "q-led-row";
     const ts = document.createElement("span");
     ts.className = "q-led-ts mono";
-    ts.textContent = new Date(e.ts).toLocaleString("zh-CN", {
-        month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
-    });
+    ts.textContent = fmtTime(e.ts);
     const reason = document.createElement("span");
     reason.className = "q-led-reason " + e.reason;
     reason.textContent = REASON[e.reason] || e.reason;

@@ -10,7 +10,7 @@
 
 import { S, bus } from "./state.js";
 import type { CreditResult, LedgerEntry, Quota, QuotaDetail } from "./types.js";
-import { $, toast, btnBusy, btnDone, askConfirm } from "./util.js";
+import { $, toast, btnBusy, btnDone, askConfirm, fmtTime } from "./util.js";
 import { api } from "./api.js";
 import { setTip } from "./tip.js";
 
@@ -155,9 +155,7 @@ function ledgerRow(e: LedgerEntry) {
 
   const ts = document.createElement("span");
   ts.className = "q-led-ts mono";
-  ts.textContent = new Date(e.ts).toLocaleString("zh-CN", {
-    month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
-  });
+  ts.textContent = fmtTime(e.ts);
 
   const reason = document.createElement("span");
   reason.className = "q-led-reason " + e.reason;

@@ -9,6 +9,7 @@ import { hideTip, setTip } from "./tip.js";
 import { boundAccounts, instanceToolsLabel } from "./data.js";
 import { api } from "./api.js";
 import { svgIcon } from "./icons.js";
+import { sessionState } from "./session-state.js";
 /* ---- 侧栏：桌面收起偏好与移动抽屉各自独立 ---- */
 const narrowMQ = window.matchMedia("(max-width: 760px)");
 const sidebar = $("sidebar");
@@ -307,7 +308,7 @@ export function showView(name) {
     renderSidebar();
 }
 $("btn-settings").addEventListener("click", () => emit("open-settings"));
-/* btn-usagelog 而非 btn-usage：后者是工作台头部的「额度」按钮，见 index.html 注释。 */
+/* 账号额度在工作台头部的 ⋯ 菜单里；这里是侧栏的使用记录入口。 */
 $("btn-usagelog").addEventListener("click", () => emit("open-usage"));
 $("btn-tunnel").addEventListener("click", () => emit("open-tunnel"));
 /* ---- 侧栏：会话列表 ---- */

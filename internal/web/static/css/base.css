@@ -42,6 +42,10 @@
   --red-hi: #fda4af;
   --red-line: #881337;
   --on-red: #fff;
+  /* 警告（额度将尽、休眠、限流预警）：独立于琥珀的黄。琥珀只表示「主操作 / 选中」，
+   * 警告也用琥珀的话，用户分不清哪个是要点的、哪个是要注意的。 */
+  --warn: #e2c55a;
+  --warn-line: #574c26;
 
   /* ---- 代码片段（行内 code / 代码块 / 文件编辑器） ---- */
   --code-bg: #080d17;
@@ -104,6 +108,8 @@
   --red: #be123c;
   --red-hi: #9f1239;
   --red-line: #fecdd3;
+  --warn: #a16207;
+  --warn-line: #fde68a;
 
   --code-bg: #f7f9fc;
   --code-head: #edf2f7;
@@ -313,7 +319,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   gap: 14px;
   padding: 36px 20px;
   color: var(--muted);
-  font-family: var(--mono); font-size: 12px;
+  font-size: 12.5px;
 }
 .loading-block .spin { width: 30px; height: 30px; border-width: 3px; }
 

@@ -302,14 +302,32 @@ export async function smoke(page) {
   // Open through public event used by sidebar; user UI may nest the button in a menu.
   await page.evaluate(async () => { const {emit}=await import('/_v/{{BUILD}}/js/state.js');emit('open-settings'); });
   await page.locator('#set-nav [data-sec="container"]').click();
+  // One save bar for every card: it appears on edit, names the changed cards and submits once.
+  assert.equal(await page.locator('#set-savebar').isVisible(),false,'save bar shown without changes');
   await page.locator('#set-running').fill('4');
-  await page.locator('#btn-save-resources').click();
-  await page.waitForFunction(() => document.querySelector('#set-running').value==='4');
-  assert.equal(settingsWrites,1);
+  await page.locator('#set-idle').fill('45');
+  await page.locator('#set-savebar').waitFor();
+  assert.match(await page.locator('#set-savebar-text').innerText(),/容量与磁盘、空闲自动停机/);
+  // Switching sections with unsaved edits asks first; cancelling keeps the edits.
+  await page.locator('#set-nav [data-sec="interface"]').click();
+  await page.locator('#dlg-ask[open]').waitFor();
+  await page.locator('#ask-cancel').click();
+  assert.equal(await page.locator('#sec-container').isVisible(),true);
+  assert.equal(await page.locator('#set-running').inputValue(),'4');
+  await page.locator('#set-save').click();
+  await page.waitForFunction(() => document.querySelector('#set-savebar').hidden);
+  assert.equal(settingsWrites,1,'save bar must merge dirty cards into one write');
   assert.equal(settings.resources.max_running,4);
+  assert.equal(settings.idle_timeout_min,45);
+  // Discard restores the last saved values without a write.
+  await page.locator('#set-running').fill('9');
+  await page.locator('#set-discard').click();
+  assert.equal(await page.locator('#set-running').inputValue(),'4');
+  assert.equal(await page.locator('#set-savebar').isVisible(),false);
   // Reinitialization must not double-bind form submission.
   await page.evaluate(async () => { const m=await import('/_v/{{BUILD}}/js/settings.js');m.initSettings();m.initSettings(); });
-  await page.locator('#btn-save-resources').click();
+  await page.locator('#set-running').fill('5');
+  await page.locator('#set-save').click();
   await page.waitForTimeout(100);assert.equal(settingsWrites,2);
   await imageUpdateSmoke(page);
   // Account creation stays in one dialog; authorization failure is retryable.
@@ -345,7 +363,10 @@ export async function smoke(page) {
   }
   assert.equal(accountCreates,3);assert.equal(keyWrites,2);
   const acctRow = page.locator('.acct-row').filter({hasText:'codex-key-fixture'});
-  await acctRow.getByRole('button',{name:'模型能力',exact:true}).click();
+  // Secondary account actions live in the row menu; delete stays last.
+  await acctRow.locator('.more-btn').click();
+  assert.deepEqual(await page.locator('.menu-pop [role=menuitem]').allInnerTexts(),['使用范围 · 全体用户','模型能力','删除账号']);
+  await page.getByRole('menuitem',{name:'模型能力',exact:true}).click();
   await page.locator('#ask-input-field').fill('fixture');await page.locator('#ask-input-ok').click();
   const overrideDialog=page.locator('dialog[open]').filter({has:page.locator('select[name="support"]')});
   await overrideDialog.locator('label').filter({hasText:'支持范围'}).getByRole('combobox').click();
@@ -487,7 +508,7 @@ export async function smoke(page) {
   await page.locator('#btn-pick').filter({hasText:'Fixture'}).waitFor();
   await pick('推理强度','极高');
   await pick('模型','Fixture Lite');
-  assert.match(await page.locator('#btn-pick').innerText(),/跟随 CLI 默认/);
+  assert.match(await page.locator('#btn-pick').innerText(),/默认强度/);
   await pick('推理强度','高');
   await page.locator('#chat-input').fill('synthetic reasoning message');
   await page.locator('#chat-send').click();
@@ -517,7 +538,7 @@ export async function smoke(page) {
   },base);
   await page.reload();
   await page.locator('#btn-pick').filter({hasText:'Fixture Lite'}).waitFor();
-  assert.match(await page.locator('#btn-pick').innerText(),/跟随 CLI 默认/,'v1 persisted choice must migrate safely');
+  assert.match(await page.locator('#btn-pick').innerText(),/默认强度/,'v1 persisted choice must migrate safely');
   await page.setViewportSize({width:390,height:844});
   await page.locator('#btn-pick').click();
   await page.locator('#pick-menu .pick-row').filter({hasText:'推理强度'}).click();
@@ -565,6 +586,41 @@ export async function smoke(page) {
   await key('up').click(); await lastInput('\x1bOA');
   await modifier('ctrl').click(); await key('left').click(); await lastInput('\x1b[1;5D');
   await key('|').click(); await lastInput('|');
+  // iOS Chinese keyboards commit "，" as a keydown without a printable keyCode plus insertText;
+  // xterm 6 skips that input event. Keycode 229 is diffed by xterm itself, so it must not double-send.
+  // iOS may also write the text after xterm's keycode-229 textarea diff has already run.
+  const commit = (ch, keyCode, late = 0) => page.locator('.xterm-helper-textarea').evaluate(async (t, [ch, keyCode, late]) => {
+   const key = type => t.dispatchEvent(new KeyboardEvent(type, {key:keyCode === 229 ? 'Process' : ch, keyCode, bubbles:true, cancelable:true, composed:true}));
+   key('keydown');
+   if (late) await new Promise(r => setTimeout(r, late));
+   t.value += ch;
+   t.dispatchEvent(new InputEvent('input', {inputType:'insertText', data:ch, bubbles:true, composed:true}));
+   key('keyup');
+  }, [ch, keyCode, late]);
+  const imeStart = terminalInput.length;
+  await commit('，', 0); await lastInput('，');
+  await commit('，', 229); await lastInput('，');
+  await commit('，', 229, 15); await lastInput('，');
+  await page.keyboard.type(','); await lastInput(',');
+  assert.deepEqual(terminalInput.slice(imeStart), ['，','，','，',','], 'IME punctuation must be sent exactly once');
+  // Repeated taps on the iOS punctuation key cycle ，→。→？ by deleting or replacing the last symbol
+  // without key events; the terminal needs a backspace first.
+  const retype = (ch, mode) => page.locator('.xterm-helper-textarea').evaluate((t, [ch, mode]) => {
+   const fire = (type, inputType, data) => t.dispatchEvent(new InputEvent(type, {inputType, data, bubbles:true, cancelable:true, composed:true}));
+   const chars = [...t.value];
+   if (mode === 'delete') {
+    fire('beforeinput','deleteContentBackward',null); t.value = chars.slice(0,-1).join(''); fire('input','deleteContentBackward',null);
+    fire('beforeinput','insertText',ch); t.value += ch; fire('input','insertText',ch);
+   } else {
+    fire('beforeinput','insertText',ch); t.value = chars.slice(0,-1).join('') + ch; fire('input','insertText',ch);
+   }
+  }, [ch, mode]);
+  const cycleStart = terminalInput.length;
+  await retype('。','delete'); await lastInput('。');
+  await retype('？','replace'); await lastInput('？');
+  await page.keyboard.press('Backspace'); await lastInput('\x7f');
+  // Message boundaries depend on whether xterm or the bridge sends the insertion; the PTY sees one byte stream.
+  assert.equal(terminalInput.slice(cycleStart).join(''), '\x7f。\x7f？\x7f', 'cycled punctuation must replace the previous symbol');
   await page.locator('#term-keyboard').click();
   assert.equal(await page.locator('.xterm-helper-textarea').evaluate(el=>el===document.activeElement),false);
   await page.locator('#term-keyboard').click();

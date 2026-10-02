@@ -42,11 +42,12 @@ DELETE /api/sessions/{id}?purge=1   删除（purge 同时清除文件、配置�
 文件、预览和技能内容访问均通过受限目录句柄，不沿符号链接访问；无效路径或静态链接通常返回 `400`，路径并发变化可能返回 `404` 或操作错误。编辑器 PUT 以原子替换保存，并保留原文件权限位。上传在服务端 staging 目录验证后合并，解压失败不改动原目录；合并并非跨目录事务。
 
 ```text
-POST   /api/sessions/{id}/upload    上传 multipart(file)，普通文件或 zip/tar.gz/tgz/tar；clear=1 先清空
-GET    /api/sessions/{id}/projects 列出并注册工作空间的一级项目，返回稳定 project_id
-POST   /api/sessions/{id}/projects 新建项目 {name}
-PATCH  /api/sessions/{id}/projects/{project} 重命名项目 {name}
+POST   /api/sessions/{id}/upload    上传 multipart(file)，普通文件或 zip/tar.gz/tgz/tar；?path= 指定目标子目录（默认根目录），clear=1 先清空该目标目录
+GET    /api/sessions/{id}/projects 列出并注册工作空间的一级项目，返回稳定 project_id 及 agent/command/default_command/custom_command
+POST   /api/sessions/{id}/projects 新建项目 {name, agent?, command?}；command 为空或等于默认值即使用工具默认启动命令
+PATCH  /api/sessions/{id}/projects/{project} 修改项目 {name?, agent?, command?}；command 传空串恢复默认
 DELETE /api/sessions/{id}/projects/{project} 将项目移入服务器回收目录
+DELETE /api/sessions/{id}/term/shells/{tab}?project= 结束一个独立 shell 标签（mode=shell&tab=）的 tmux 会话
 GET    /api/sessions/{id}/archive   打包下载 (zip)
 GET    /api/sessions/{id}/files     文件列表（含权限/大小/时间）?path=
 DELETE /api/sessions/{id}/files     递归删除文件或目录 ?path=
