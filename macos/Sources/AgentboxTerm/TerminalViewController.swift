@@ -119,9 +119,7 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         surface.nativeBackgroundColor = TerminalThemeManager.nsColor(scheme.background)
         surface.nativeForegroundColor = TerminalThemeManager.nsColor(scheme.foreground)
         surface.installColors(scheme.ansi.map { TerminalThemeManager.termColor($0) })
-        if surface.font != TerminalThemeManager.font() {
-            surface.font = TerminalThemeManager.font()
-        }
+        applyFittedFont()
         surface.applyMouseMode()
         refitPTY()
     }
@@ -215,8 +213,33 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
     /// after a tab returns to the hierarchy: while backgrounded the view
     /// receives no layout events, so the grid keeps the old column count and
     /// SwiftTerm leaves the uncovered strip unpainted (stale pixels show).
+    /// The font for the width the terminal actually has.
+    ///
+    /// With 自动字号 on, a window too narrow to show the target column count at
+    /// the chosen size gets a smaller one instead, so a TUI is given the width
+    /// it needs rather than truncating its own output. Changing the font makes
+    /// SwiftTerm recompute its cell size, which is why this runs before the
+    /// columns are read.
+    private func applyFittedFont() {
+        let base = TerminalThemeManager.fontSize
+        var size = base
+        if TerminalThemeManager.autoFontSize {
+            size = TerminalFit.size(
+                base: base,
+                cellWidthAtBase: TerminalFit.cellWidth(of: TerminalThemeManager.font(size: base)),
+                width: surface.bounds.width,
+                columns: TerminalThemeManager.fitColumns
+            )
+        }
+        let font = TerminalThemeManager.font(size: size)
+        if surface.font != font {
+            surface.font = font
+        }
+    }
+
     func refitPTY() {
         view.layoutSubtreeIfNeeded()
+        applyFittedFont()
         let terminal = surface.getTerminal()
         guard terminal.cols != lastSentCols || terminal.rows != lastSentRows else { return }
         sendSize(cols: terminal.cols, rows: terminal.rows)

@@ -69,6 +69,8 @@ enum TerminalThemeManager {
     static let schemeChanged = Notification.Name("agentbox.terminal.scheme-changed")
     private static let schemeKey = "agentbox.terminal.scheme"
     private static let fontSizeKey = "agentbox.terminal.font-size"
+    private static let autoFontKey = "agentbox.terminal.auto-font-size"
+    private static let fitColumnsKey = "agentbox.terminal.fit-columns"
     private static let fontFamilyKey = "agentbox.terminal.font-family"
     private static let mouseModeKey = "agentbox.terminal.mouse-mode"
     private static let customSchemeKey = "agentbox.terminal.custom-scheme"
@@ -251,6 +253,29 @@ enum TerminalThemeManager {
         NotificationCenter.default.post(name: schemeChanged, object: nil)
     }
 
+    /// Shrink the terminal font when the window is too narrow to show
+    /// `fitColumns` columns at the chosen size, so a TUI gets the width it
+    /// needs instead of truncating its lines. It never grows past the chosen
+    /// size — that stays the ceiling.
+    static var autoFontSize: Bool {
+        UserDefaults.standard.object(forKey: autoFontKey) as? Bool ?? true
+    }
+
+    static var fitColumns: Int {
+        let stored = UserDefaults.standard.integer(forKey: fitColumnsKey)
+        return stored > 0 ? stored : 100
+    }
+
+    static func update(autoFontSize: Bool) {
+        UserDefaults.standard.set(autoFontSize, forKey: autoFontKey)
+        NotificationCenter.default.post(name: schemeChanged, object: nil)
+    }
+
+    static func update(fitColumns: Int) {
+        UserDefaults.standard.set(fitColumns, forKey: fitColumnsKey)
+        NotificationCenter.default.post(name: schemeChanged, object: nil)
+    }
+
     static func update(fontSize: CGFloat) {
         UserDefaults.standard.set(Double(fontSize), forKey: fontSizeKey)
         NotificationCenter.default.post(name: schemeChanged, object: nil)
@@ -258,7 +283,11 @@ enum TerminalThemeManager {
 
     /// The terminal font: the chosen family with the CJK fallback cascade.
     static func font() -> NSFont {
-        NativeTheme.terminalFont(size: fontSize, postScriptName: fontFamily.resolvedName)
+        font(size: fontSize)
+    }
+
+    static func font(size: CGFloat) -> NSFont {
+        NativeTheme.terminalFont(size: size, postScriptName: fontFamily.resolvedName)
     }
 
     // MARK: Mouse reporting
@@ -321,5 +350,32 @@ enum TerminalThemeManager {
         let green = (value & 0x00FF00) >> 8
         let blue = value & 0x0000FF
         return (0.299 * Double(red) + 0.587 * Double(green) + 0.114 * Double(blue)) > 140
+    }
+}
+
+
+/// Chooses the terminal font size for a given width.
+///
+/// A monospaced cell is as wide as the font's "W" advancement, which scales
+/// linearly with the point size, so the largest size that still shows a target
+/// number of columns is one division rather than a search. The user's size is
+/// the ceiling: this only ever shrinks, and never past `minimumSize`, where
+/// text would stop being readable in exchange for columns nobody can see.
+enum TerminalFit {
+    static let minimumSize: CGFloat = 8
+
+    static func size(base: CGFloat, cellWidthAtBase: CGFloat, width: CGFloat, columns: Int) -> CGFloat {
+        guard base > 0, cellWidthAtBase > 0, width > 0, columns > 0 else { return base }
+        let affordableCell = width / CGFloat(columns)
+        let scaled = base * affordableCell / cellWidthAtBase
+        // Half-point steps, rounded down: rounding up would overshoot the width
+        // by a fraction of a cell and lose the column it was bought for.
+        let stepped = (scaled * 2).rounded(.down) / 2
+        return min(base, max(minimumSize, stepped))
+    }
+
+    /// The cell width SwiftTerm will compute for this font on macOS.
+    static func cellWidth(of font: NSFont) -> CGFloat {
+        max(1, font.advancement(forGlyph: font.glyph(withName: "W")).width)
     }
 }

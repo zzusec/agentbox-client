@@ -11,6 +11,10 @@ final class TerminalSettingsViewController: NSViewController {
     private var fontPreview: NSTextField?
     private var mouseSegment: NSSegmentedControl?
     private var mouseHint: NSTextField?
+    private var autoFontCheck: NSButton?
+    private var fitColumnsSegment: NSSegmentedControl?
+
+    private static let fitColumnChoices = [80, 100, 120, 160]
 
     private static let fontSizes: [(String, CGFloat)] = [
         ("小 12", 12), ("标准 13", 13), ("大 15", 15), ("特大 17", 17),
@@ -101,6 +105,18 @@ final class TerminalSettingsViewController: NSViewController {
             action: #selector(fontSizeChanged(_:))
         )
 
+        let fitLabel = sectionLabel("自动字号")
+        let fitHint = sectionHint("窗口放不下目标列数时自动缩小字号（不超过上面选的字号，最小 8pt），避免 TUI 把内容截断。")
+        let autoFontCheck = NSButton(
+            checkboxWithTitle: "按窗口宽度自动缩小", target: self, action: #selector(autoFontChanged(_:))
+        )
+        self.autoFontCheck = autoFontCheck
+        let fitColumnsSegment = NSSegmentedControl(
+            labels: Self.fitColumnChoices.map { "\($0) 列" }, trackingMode: .selectOne, target: self,
+            action: #selector(fitColumnsChanged(_:))
+        )
+        self.fitColumnsSegment = fitColumnsSegment
+
         let mouseLabel = sectionLabel("鼠标上报")
         let mouseHint = sectionHint("")
         let modes: [TerminalMouseMode] = [.off, .on, .smart]
@@ -116,6 +132,7 @@ final class TerminalSettingsViewController: NSViewController {
             schemeLabel, schemeHint, grid, editor,
             fontLabel, fontHint, fontPopup, previewHolder,
             sizeLabel, sizeHint, fontSegment,
+            fitLabel, fitHint, autoFontCheck, fitColumnsSegment,
             mouseLabel, mouseHint, mouseSegment,
         ])
         content.orientation = .vertical
@@ -208,6 +225,12 @@ final class TerminalSettingsViewController: NSViewController {
             attributes: [.font: TerminalThemeManager.font()]
         )
 
+        let auto = TerminalThemeManager.autoFontSize
+        autoFontCheck?.state = auto ? .on : .off
+        fitColumnsSegment?.isEnabled = auto
+        fitColumnsSegment?.selectedSegment =
+            Self.fitColumnChoices.firstIndex(of: TerminalThemeManager.fitColumns) ?? 1
+
         let modes: [TerminalMouseMode] = [.off, .on, .smart]
         let mode = TerminalThemeManager.mouseMode
         if let mouseSegment {
@@ -239,6 +262,18 @@ final class TerminalSettingsViewController: NSViewController {
     @objc private func fontFamilyChanged(_ sender: NSPopUpButton) {
         guard let id = sender.selectedItem?.representedObject as? String else { return }
         TerminalThemeManager.selectFontFamily(id)
+        refreshSelection()
+    }
+
+    @objc private func autoFontChanged(_ sender: NSButton) {
+        TerminalThemeManager.update(autoFontSize: sender.state == .on)
+        refreshSelection()
+    }
+
+    @objc private func fitColumnsChanged(_ sender: NSSegmentedControl) {
+        let choices = Self.fitColumnChoices
+        guard sender.selectedSegment >= 0, sender.selectedSegment < choices.count else { return }
+        TerminalThemeManager.update(fitColumns: choices[sender.selectedSegment])
         refreshSelection()
     }
 

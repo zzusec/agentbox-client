@@ -619,6 +619,7 @@ struct AppSmokeChecks {
         tabStripChecks(client: client, workspace: shellWorkspace)
         inputMethodChecks()
         appMenuChecks()
+        fontFitChecks()
         // Uploads report progress as text in the banner; a progress bar over
         // the terminal was one more thing covering the output.
         let uploadTab = TerminalViewController(
@@ -912,6 +913,24 @@ struct AppSmokeChecks {
         try? await Task.sleep(nanoseconds: 60_000_000)
     }
 
+    /// Auto font sizing: the user's size is the ceiling, the floor is the
+    /// readable minimum, and in between the size must actually leave room for
+    /// the target columns.
+    @MainActor
+    static func fontFitChecks() {
+        let base: CGFloat = 13, cell: CGFloat = 8
+        precondition(TerminalFit.size(base: base, cellWidthAtBase: cell, width: 1600, columns: 100) == base,
+                     "a wide enough window keeps the chosen size")
+        let fitted = TerminalFit.size(base: base, cellWidthAtBase: cell, width: 600, columns: 100)
+        precondition(fitted < base, "a narrow window must shrink the font")
+        precondition(fitted >= TerminalFit.minimumSize, "never below the readable floor")
+        precondition(fitted * cell / base * 100 <= 600, "the fitted size must really fit 100 columns")
+        precondition(TerminalFit.size(base: base, cellWidthAtBase: cell, width: 40, columns: 100) == TerminalFit.minimumSize,
+                     "an impossible width stops at the floor instead of vanishing")
+        precondition(TerminalFit.size(base: base, cellWidthAtBase: cell, width: 0, columns: 100) == base,
+                     "a view with no width yet must not resize the font")
+    }
+
     /// The app menu: the version reads straight off it, and 设置… reaches the
     /// window's controller through the responder chain (no target of its own).
     @MainActor
@@ -1119,7 +1138,7 @@ struct AppSmokeChecks {
             controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
-        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, the input-method preview, a bar-free upload banner, the app menu's version and 设置… entry, and removed sync panel")
+        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, the input-method preview, a bar-free upload banner, the app menu's version and 设置… entry, auto font fitting, and removed sync panel")
         if ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_KEEP_OPEN"] == "1" {
             try await Task.sleep(nanoseconds: 120_000_000_000)
         }
