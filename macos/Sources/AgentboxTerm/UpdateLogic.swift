@@ -87,3 +87,19 @@ enum UpdateLogic {
         return (numbers, parts.count > 1 ? parts[1] : nil)
     }
 }
+
+extension UpdateLogic {
+    /// Whether a freshly reported server version is a reason to go looking for
+    /// a client update.
+    ///
+    /// Only a change counts, and only once something has been seen before: the
+    /// first sighting after a launch or a new pairing says nothing about
+    /// whether this app is behind. The versions themselves are never compared
+    /// — the server and the Mac app are separate release lines — so this is a
+    /// trigger, not a verdict; what actually gets installed still comes from
+    /// the signed, checksummed GitHub release.
+    static func serverChanged(previous: String?, current: String) -> Bool {
+        guard !current.isEmpty, let previous, !previous.isEmpty else { return false }
+        return previous != current
+    }
+}

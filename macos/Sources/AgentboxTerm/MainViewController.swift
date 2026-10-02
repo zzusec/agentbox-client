@@ -635,11 +635,24 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         // too old must not be retried once a second.
         clockSyncedAt = Date()
         Task { @MainActor in
-            guard let identity = try? await client.identity(), let now = identity.now,
+            guard let identity = try? await client.identity() else { return }
+            noteServerVersion(identity.serverVersion)
+            guard let now = identity.now,
                   let clock = ServerClock(now: now, timezone: identity.timezone ?? "") else { return }
             serverClock = clock
             sidebar.setServerClock(clock.text(), zone: clock.zoneName)
         }
+    }
+
+    /// A deployed server is the signal to look for a client build: the sync
+    /// engine in this app and that server are released together.
+    private func noteServerVersion(_ version: String?) {
+        guard let version, !version.isEmpty else { return }
+        let key = "agentbox.server.version"
+        let previous = UserDefaults.standard.string(forKey: key)
+        UserDefaults.standard.set(version, forKey: key)
+        guard UpdateLogic.serverChanged(previous: previous, current: version) else { return }
+        UpdateManager.shared.serverDidChange()
     }
 
     override func viewDidLayout() {

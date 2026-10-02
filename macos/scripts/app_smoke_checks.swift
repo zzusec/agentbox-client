@@ -620,6 +620,7 @@ struct AppSmokeChecks {
         inputMethodChecks()
         appMenuChecks()
         fontFitChecks()
+        serverVersionTriggerChecks()
         // Uploads report progress as text in the banner; a progress bar over
         // the terminal was one more thing covering the output.
         let uploadTab = TerminalViewController(
@@ -939,6 +940,22 @@ struct AppSmokeChecks {
                      "a view with no width yet must not resize the font")
     }
 
+    /// A redeployed server makes the client look for its own update — but only
+    /// on a change, and never by comparing the two version lines.
+    @MainActor
+    static func serverVersionTriggerChecks() {
+        precondition(!UpdateLogic.serverChanged(previous: nil, current: "v0.1.7-custom24"),
+                     "the first sighting says nothing about being behind")
+        precondition(!UpdateLogic.serverChanged(previous: "", current: "v0.1.7-custom24"))
+        precondition(!UpdateLogic.serverChanged(previous: "v0.1.7-custom24", current: "v0.1.7-custom24"),
+                     "the same server is not a reason to check")
+        precondition(!UpdateLogic.serverChanged(previous: "v0.1.7-custom24", current: ""),
+                     "an older server that reports nothing must not trigger anything")
+        precondition(UpdateLogic.serverChanged(previous: "v0.1.7-custom24", current: "v0.1.7-custom25"))
+        // A downgrade counts too: the client that matches it may also be older.
+        precondition(UpdateLogic.serverChanged(previous: "v0.1.7-custom25", current: "v0.1.7-custom24"))
+    }
+
     /// The app menu: the version reads straight off it, and 设置… reaches the
     /// window's controller through the responder chain (no target of its own).
     @MainActor
@@ -1195,7 +1212,7 @@ struct AppSmokeChecks {
             controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
-        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, the input-method preview, a bar-free upload banner, the app menu's version and 设置… entry, auto font fitting, and removed sync panel")
+        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, the input-method preview, a bar-free upload banner, the app menu's version and 设置… entry, auto font fitting, the server-version update trigger, and removed sync panel")
         if ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_KEEP_OPEN"] == "1" {
             try await Task.sleep(nanoseconds: 120_000_000_000)
         }

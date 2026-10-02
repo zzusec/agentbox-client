@@ -43,6 +43,25 @@ final class UpdateManager {
         check(interactive: true)
     }
 
+    /// The server was redeployed. The two are released together — this app
+    /// carries the sync engine that talks to that server — so look for a client
+    /// build now instead of waiting out the four-hour timer.
+    ///
+    /// The matching client release is usually published minutes after the
+    /// server is live, so a couple of follow-ups cover that gap. Nothing is
+    /// installed unless 自动检查并准备更新 is on; the check is otherwise silent.
+    func serverDidChange() {
+        check(interactive: false)
+        for delay in Self.followUpDelays {
+            let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+                Task { @MainActor in self?.check(interactive: false) }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+        }
+    }
+
+    private static let followUpDelays: [TimeInterval] = [10 * 60, 30 * 60]
+
     private func schedule() {
         timer?.invalidate()
         guard UserDefaults.standard.bool(forKey: "agentbox.update.auto") else { return }

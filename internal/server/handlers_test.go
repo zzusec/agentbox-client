@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"agentbox/internal/buildinfo"
 	"agentbox/internal/config"
 	"agentbox/internal/store"
 )
@@ -372,8 +373,9 @@ func TestHandleMeReportsTheServerClock(t *testing.T) {
 		t.Fatalf("status = %d", w.Code)
 	}
 	var body struct {
-		TimeZone string `json:"timezone"`
-		Now      string `json:"now"`
+		TimeZone      string `json:"timezone"`
+		Now           string `json:"now"`
+		ServerVersion string `json:"server_version"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
@@ -390,5 +392,10 @@ func TestHandleMeReportsTheServerClock(t *testing.T) {
 	}
 	if drift := time.Since(now); drift < -time.Minute || drift > time.Minute {
 		t.Fatalf("now = %q is %v away from this clock", body.Now, drift)
+	}
+	// The Mac client watches this for changes and then goes looking for a
+	// client build of its own, so it has to be reported even on a plain build.
+	if body.ServerVersion != buildinfo.Version {
+		t.Fatalf("server_version = %q, want %q", body.ServerVersion, buildinfo.Version)
 	}
 }

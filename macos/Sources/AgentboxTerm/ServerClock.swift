@@ -81,4 +81,13 @@ struct ServerIdentity: Decodable {
     /// Absent on servers older than v0.1.7-custom22, which simply means no clock.
     let now: String?
     let timezone: String?
+    /// The server's release. Absent on older servers; only ever compared with
+    /// the last one seen, never with this app's own version — the two are
+    /// separate release lines.
+    let serverVersion: String?
+
+    enum CodingKeys: String, CodingKey {
+        case now, timezone
+        case serverVersion = "server_version"
+    }
 }

@@ -17,7 +17,7 @@
 | `GET /api/ping` | 公开 | 轻量探活，成功 `204` |
 | `POST /api/login` | 公开 | `{username, password}` |
 | `POST /api/logout` | 已登录 | 撤销当前令牌 |
-| `GET /api/me` | 已登录 | 当前用户、角色、时区、`now`（服务器当前时间，按该时区的 RFC3339）、额度及界面所需信息 |
+| `GET /api/me` | 已登录 | 当前用户、角色、时区、`now`（服务器当前时间，按该时区的 RFC3339）、`server_version`（发布版本，客户端据此判断服务端是否换版）、额度及界面所需信息 |
 | `POST /api/me/password` | 已登录 | `{old_password, new_password}`；保留当前令牌，撤销其他登录 |
 | `POST /api/tunnel/pair/redeem` | 凭配对码 | 配对码本身是一次性凭证，无需另带登录令牌 |
 | `POST /api/clients/pair` | 已登录 | 生成一次性客户端配对码，不要求启用内网隧道 |

@@ -26,6 +26,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"agentbox/internal/buildinfo"
 	"agentbox/internal/config"
 	"agentbox/internal/credentials"
 	"agentbox/internal/dockerx"
@@ -630,6 +631,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// 服务器自己的墙钟，按同一个时区格式化：Mac 客户端拿它对表，之后本地走秒，
 		// 不必每秒请求一次。带偏移量的 RFC3339 让客户端不认识该时区名时仍能显示。
 		"now": time.Now().In(s.cfg.GetLocation()).Format(time.RFC3339),
+		// 这台服务端的发布版本。客户端只拿它当「服务端换版本了」的信号：一旦和上次
+		// 看到的不同，就立刻去查自己的更新，而不是干等四小时的定时器。服务端不替客户端
+		// 指定该装哪一版——那会让两条发布线互相绑死。
+		"server_version": buildinfo.Version,
 		// 自己的额度：metered 为 false 就是不限额，前端不必显示余额。
 		"quota": viewQuota(u.Name, q, metered),
 	})

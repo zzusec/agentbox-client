@@ -421,6 +421,8 @@ export interface Me {
   timezone: string;
   /** 服务器当前时间，按上面的时区格式化的 RFC3339；Mac 客户端用它对表 */
   now: string;
+  /** 服务端发布版本；Mac 客户端只用它判断「服务端换版本了，去查自己的更新」 */
+  server_version: string;
   quota: Quota | null;
 }
 
