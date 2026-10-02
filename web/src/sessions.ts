@@ -292,8 +292,8 @@ async function loadInstanceProxies(token: string) {
     fillProxySelect(select, Array.isArray(options) ? options : []);
   } catch (error) {
     if (token !== S.token) return;
-    // 读不到就明说：这是必填项，静默留空会让人以为可以跳过。
-    select.replaceChildren(Object.assign(document.createElement("option"), { value: NO_PROXY, textContent: "读取代理列表失败，请重试" }));
+    // 读不到就明说，免得用户以为代理池是空的；仍可选择直连。
+    select.replaceChildren(Object.assign(document.createElement("option"), { value: NO_PROXY, textContent: "不绑定（读取代理列表失败，服务器直连）" }));
     toast("读取代理列表失败：" + (error as Error).message, true);
   } finally {
     if (token === S.token) select.disabled = false;
@@ -304,12 +304,8 @@ function fillProxySelect(select: HTMLSelectElement, options: InstanceProxyOption
   select.replaceChildren();
   // 只有标注为住宅的代理可用于新实例；未标注是历史代理，服务端会拒绝。
   const usable = options.filter(option => option.kind === "residential");
-  if (!usable.length) {
-    const hint = options.length ? "没有标注为住宅的代理，请先在系统设置里标注" : "代理池为空，请先在系统设置里添加住宅代理";
-    select.append(Object.assign(document.createElement("option"), { value: NO_PROXY, textContent: hint }));
-    return;
-  }
-  select.append(Object.assign(document.createElement("option"), { value: "", textContent: "请选择出口代理" }));
+  // 代理可选：留空即实例走服务器自身出口。
+  select.append(Object.assign(document.createElement("option"), { value: NO_PROXY, textContent: "不绑定（服务器直连）" }));
   for (const option of usable) select.append(Object.assign(document.createElement("option"), { value: option.id, textContent: option.name }));
 }
 
@@ -427,10 +423,6 @@ $("new-form").addEventListener("submit", async (e) => {
   }
   if (!claudeID && !codexID) {
     fail("请至少绑定一个账号。");
-    return;
-  }
-  if (!proxyID) {
-    fail("请选择出口住宅代理：实例没有代理就无法启动。");
     return;
   }
   const body = {

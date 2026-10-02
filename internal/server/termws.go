@@ -79,7 +79,7 @@ func termCommand(env []string) string {
 	if sync := tmuxEnvSync(env); sync != "" {
 		cmd += "{ " + sync + "} >/dev/null 2>&1\n"
 	}
-	return cmd + "exec tmux -u new-session -A -D -s main"
+	return cmd + tmuxAttach("new-session -A -D -s main")
 }
 
 // agentTermCommand opens the interactive coding agent for one workspace
@@ -103,8 +103,26 @@ func agentTermCommand(env []string, project, command, workspace string) string {
 	if sync := tmuxEnvSync(env); sync != "" {
 		cmd += "{ " + sync + "} >/dev/null 2>&1\n"
 	}
-	return cmd + "exec tmux -u new-session -A -D -s " +
-		shellQuote(agentTmuxSession(project)) + " " + shellQuote(run)
+	return cmd + tmuxAttach("new-session -A -D -s "+
+		shellQuote(agentTmuxSession(project))+" "+shellQuote(run))
+}
+
+// tmuxNoAltScreen tells tmux not to switch the client terminal to its
+// alternate screen. On the alternate screen everything tmux scrolls away is
+// lost to the outer terminal, so the Mac app's scrollbar and the browser's
+// scrollback had nothing to show; on the normal screen lines that scroll off
+// the top land in the outer terminal's own history, where wheel, scrollbar
+// and local selection all work.
+const tmuxNoAltScreen = ",*:smcup@:rmcup@"
+
+// tmuxAttach execs tmux with args (already shell-quoted). The override is a
+// server option and only reaches clients that attach after it is set, so it is
+// set ahead of the attach: appended once on a running server (checked first,
+// or every connection would append another copy), or as the first command of
+// the same invocation when this attach is what starts the server.
+func tmuxAttach(args string) string {
+	return "if tmux show-options -sv terminal-overrides 2>/dev/null | grep -qF 'smcup@'; then exec tmux -u " + args + "; fi\n" +
+		"exec tmux -u start-server \\; set-option -sa terminal-overrides " + shellQuote(tmuxNoAltScreen) + " \\; " + args
 }
 
 // agentTmuxSession avoids tmux's separator characters and keeps names stable
@@ -143,7 +161,7 @@ func shellTermCommand(env []string, dir, session string) string {
 	if sync := tmuxEnvSync(env); sync != "" {
 		cmd += "{ " + sync + "} >/dev/null 2>&1\n"
 	}
-	return cmd + "exec tmux -u new-session -A -D -s " + shellQuote(session) + " -c " + shellQuote(dir)
+	return cmd + tmuxAttach("new-session -A -D -s "+shellQuote(session)+" -c "+shellQuote(dir))
 }
 
 func parseTerminalRequest(r *http.Request) (terminalRequest, error) {

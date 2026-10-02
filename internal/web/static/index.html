@@ -620,7 +620,7 @@
               <p id="workspace-sample-status" class="instance-panel-note" role="status">进入实例页后每 5 秒采样；离开页面即停止。</p>
             </section>
           </div>
-          <section class="console-section instance-list" aria-labelledby="workspace-list-title"><div class="console-section-head"><h2 id="workspace-list-title"><span class="console-icon"><svg width="20" height="20" data-icon="box" aria-hidden="true"></svg></span>实例环境</h2><span class="tile-meta">实例名称 · Docker 容器 · 实时资源</span></div><div id="workspace-grid" class="workspace-grid"></div><div id="workspace-empty" class="console-empty"><span class="console-icon"><svg width="26" height="26" data-icon="box" aria-hidden="true"></svg></span><h3>还没有实例</h3><p>使用上方「新建实例」绑定账号并选择住宅代理，再为这个实例添加项目。</p></div></section>
+          <section class="console-section instance-list" aria-labelledby="workspace-list-title"><div class="console-section-head"><h2 id="workspace-list-title"><span class="console-icon"><svg width="20" height="20" data-icon="box" aria-hidden="true"></svg></span>实例环境</h2><span class="tile-meta">实例名称 · Docker 容器 · 实时资源</span></div><div id="workspace-grid" class="workspace-grid"></div><div id="workspace-empty" class="console-empty"><span class="console-icon"><svg width="26" height="26" data-icon="box" aria-hidden="true"></svg></span><h3>还没有实例</h3><p>使用上方「新建实例」绑定账号（住宅代理可选），再为这个实例添加项目。</p></div></section>
         </div>
       </div>
 
@@ -1436,10 +1436,10 @@
       <select id="new-default-agent" aria-describedby="new-agent-hint"></select>
     </label>
     <p id="new-agent-hint" class="field-hint">新项目默认用哪个 CLI；随时可以在项目里单独改。</p>
-    <label>出口住宅代理（必填）
-      <select id="new-proxy" required aria-describedby="new-proxy-hint"></select>
+    <label>出口住宅代理（可选）
+      <select id="new-proxy" aria-describedby="new-proxy-hint"></select>
     </label>
-    <p id="new-proxy-hint" class="field-hint">代理绑定在实例上，决定容器对外的出口 IP。未标注为住宅代理的历史代理不能用于新实例。</p>
+    <p id="new-proxy-hint" class="field-hint">代理绑定在实例上，决定容器对外的出口 IP；不绑定则走服务器直连。未标注为住宅代理的历史代理不能用于新实例。</p>
     <label>默认 Git 连接（可选）
       <select id="new-git-connection"><option value="">不绑定</option></select>
     </label>

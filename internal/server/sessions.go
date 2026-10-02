@@ -203,11 +203,15 @@ func (s *Server) resolveInstanceAccounts(w http.ResponseWriter, r *http.Request,
 	return claudeID, codexID, defaultAgent, true
 }
 
-// resolveInstanceProxy validates the mandatory exit proxy for a new instance.
+// resolveInstanceProxy validates the optional exit proxy for an instance. An
+// empty id means direct egress unless the operator made proxies mandatory.
 func (s *Server) resolveInstanceProxy(w http.ResponseWriter, proxyID string) (string, bool) {
 	if proxyID == "" {
-		writeErr(w, http.StatusBadRequest, "请为实例选择出口住宅代理")
-		return "", false
+		if s.cfg.RequireInstanceProxy() {
+			writeErr(w, http.StatusBadRequest, "请为实例选择出口住宅代理")
+			return "", false
+		}
+		return "", true
 	}
 	p, found := s.cfg.Proxy(proxyID)
 	if !found {
@@ -465,7 +469,7 @@ func (s *Server) patchInstance(w http.ResponseWriter, r *http.Request, sess stor
 	proxyID := sess.ProxyID
 	if req.ProxyID != nil {
 		v := strings.TrimSpace(*req.ProxyID)
-		if v == "" {
+		if v == "" && s.cfg.RequireInstanceProxy() {
 			writeErr(w, http.StatusBadRequest, "实例必须绑定出口代理")
 			return
 		}

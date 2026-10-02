@@ -260,6 +260,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             _nativeBg = newValue
             terminal.backgroundColor = nativeBackgroundColor.getTerminalColor ()
             settingBg = false
+            updateScrollerAppearance()
+            needsDisplay = true
         }
     }
 
@@ -333,6 +335,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
         scroller.autoresizingMask = [.minXMargin, .height]
         scroller.scrollerStyle = style
+        updateScrollerAppearance()
         scroller.knobProportion = 0.1
         scroller.isEnabled = false
         addSubview (scroller)
@@ -431,6 +434,27 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             return
         }
         drawTerminalContents (dirtyRect: dirtyRect, context: currentContext, bufferOffset: terminal.buffer.yDisp)
+        // agentbox: nothing else paints the strip right of the last column
+        // (the fractional remainder and the column under the scroller), so
+        // whatever was drawn there before stayed visible as blocks along the
+        // right edge. Fill it with the terminal background on every pass.
+        let gridRight = cellDimension.width * CGFloat(terminal.cols)
+        let strip = NSRect(x: gridRight, y: bounds.minY, width: max(0, bounds.maxX - gridRight), height: bounds.height)
+            .intersection(dirtyRect)
+        if !strip.isEmpty {
+            currentContext.setFillColor(nativeBackgroundColor.cgColor)
+            currentContext.fill(strip)
+        }
+    }
+
+    /// agentbox: the scroller follows the terminal's own background rather
+    /// than the window's appearance — a light track on a dark terminal (or
+    /// the reverse) reads as a stray bar.
+    func updateScrollerAppearance () {
+        guard let scroller else { return }
+        let rgb = nativeBackgroundColor.usingColorSpace(.sRGB) ?? nativeBackgroundColor
+        let luminance = 0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent
+        scroller.appearance = NSAppearance(named: luminance < 0.5 ? .darkAqua : .aqua)
     }
 
     public override func cursorUpdate(with event: NSEvent)

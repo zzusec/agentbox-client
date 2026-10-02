@@ -11,7 +11,7 @@
 /** GET /api/sessions、POST /api/sessions 等的实例视图（server.sessionView）。
  *
  * 一个实例 = 一个容器 + 一套工作区，可以同时绑一个 Claude 账号和一个 Codex
- * 账号；出口代理绑在实例上（必填），不再从账号继承。`account_id` / `agent` /
+ * 账号；出口代理绑在实例上（可选），不再从账号继承。`account_id` / `agent` /
  * `account_label` 是实例化之前的旧字段，服务端仍原样下发，值为「默认工具对应的
  * 那一侧」，旧客户端和旧书签都靠它继续工作。 */
 export interface Session {
@@ -28,7 +28,7 @@ export interface Session {
   codex_account_id?: string;
   /** 默认开发工具，与 agent 同值，用实例语义的名字再给一份 */
   default_agent?: string;
-  /** 实例的出口代理 id（必填；未回填的历史实例可能为空） */
+  /** 实例的出口代理 id（可选；空表示服务器直连） */
   proxy_id?: string;
   /** 出口代理展示名 */
   proxy_label?: string;

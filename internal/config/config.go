@@ -174,12 +174,10 @@ type ProxyBridgeConfig struct {
 	Bind string `json:"bind,omitempty"`
 	Host string `json:"host,omitempty"`
 	// RequireInstanceProxy makes an outbound proxy mandatory for every
-	// instance: an instance with no usable proxy fails to start instead of
-	// leaking the server's own egress IP. It is a pointer so that an explicit
-	// false survives a config round-trip (plain bool + omitempty would read
-	// back as true). Clear it to fall back to the pre-v11 behaviour — which is
-	// the escape hatch if a deployment has instances that deliberately run
-	// without a proxy.
+	// instance: an instance with no proxy fails to start instead of using the
+	// server's own egress IP. Unset means optional — an instance created
+	// without a proxy deliberately runs direct. A bound proxy that is unusable
+	// still fails closed either way.
 	RequireInstanceProxy *bool `json:"require_instance_proxy,omitempty"`
 }
 
@@ -869,15 +867,15 @@ func (c *Config) GetProxyBridge() ProxyBridgeConfig {
 	return pb
 }
 
-// RequireInstanceProxy reports whether an instance may run without a usable
-// outbound proxy. It defaults to true so a missing proxy fails closed; an
-// operator can set proxy_bridge.require_instance_proxy=false to restore the
-// pre-v11 "no proxy means direct egress" behaviour without a rollback.
+// RequireInstanceProxy reports whether every instance must bind an outbound
+// proxy. It defaults to false: the proxy is an optional per-instance choice
+// and "no proxy" means direct egress. Operators who want every instance behind
+// a residential exit set proxy_bridge.require_instance_proxy=true.
 func (c *Config) RequireInstanceProxy() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.ProxyBridge.RequireInstanceProxy == nil {
-		return true
+		return false
 	}
 	return *c.ProxyBridge.RequireInstanceProxy
 }

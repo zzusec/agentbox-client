@@ -135,6 +135,6 @@ func reportMigration(dryRun bool, withoutAccount, withoutProxy []string) {
 		log.Printf("%s：%d 个实例没有可用账号：%v", prefix, len(withoutAccount), withoutAccount)
 	}
 	if len(withoutProxy) > 0 {
-		log.Printf("%s：%d 个实例没有可用代理，启动会被拒绝：%v", prefix, len(withoutProxy), withoutProxy)
+		log.Printf("%s：%d 个实例未绑定代理（将直连；若开启 require_instance_proxy 则拒绝启动）：%v", prefix, len(withoutProxy), withoutProxy)
 	}
 }

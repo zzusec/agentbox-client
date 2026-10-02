@@ -312,13 +312,10 @@ export async function smoke(page) {
     assert.equal(await taken.getAttribute('aria-disabled'), 'true', 'a bound account must not be selectable');
     assert.match(await taken.innerText(), /已绑定：产品开发/);
     await page.keyboard.press('Escape');
-    // 只勾 Codex 账号：默认工具跟着变成 Codex，代理仍然必填。
+    // 只勾 Codex 账号：默认工具跟着变成 Codex；代理可选，默认「不绑定」。
     await choose('new-account-codex', 'Codex 备用');
     assert.match(await page.locator('#new-default-agent + .select-trigger').innerText(), /Codex CLI/);
-    await page.locator('#new-ok').click();
-    await page.locator('#new-error').waitFor({ state: 'visible' });
-    assert.match(await page.locator('#new-error').innerText(), /住宅代理/);
-    assert.equal(writes.length, writesBeforeCreate, 'an instance without a residential proxy must not be submitted');
+    assert.match(await page.locator('#new-proxy + .select-trigger').innerText(), /不绑定/);
     // 机房代理不出现在新实例可选项里：新实例只能用住宅出口。
     await page.locator('#new-proxy + .select-trigger').click();
     assert.equal(await page.locator('.select-panel:popover-open [role=option]').filter({ hasText: '机房出口' }).count(), 0);
@@ -494,7 +491,7 @@ export async function smoke(page) {
       [], 'no account/proxy/container lifecycle writes',
     );
     assert.deepEqual(errors, []);
-    console.log('Projects: dual-account instance creation with mandatory residential proxy, project tool selection/edit, single topbar theme+account, live instance resources (measuring/stale/stopped states), polling start/stop, scoped creation, validation/retry, filters, workspace configuration, ordinary-user access, project terminal URLs, file scope, deep links/stale routes, partial failures, four widths/both themes, empty states and logout cleanup passed');
+    console.log('Projects: dual-account instance creation with optional residential proxy, project tool selection/edit, single topbar theme+account, live instance resources (measuring/stale/stopped states), polling start/stop, scoped creation, validation/retry, filters, workspace configuration, ordinary-user access, project terminal URLs, file scope, deep links/stale routes, partial failures, four widths/both themes, empty states and logout cleanup passed');
   } finally {
     releaseList?.();
     await page.unroute('**/api/**'); server.closeAllConnections(); await new Promise(done => server.close(done));

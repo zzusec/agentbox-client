@@ -20,7 +20,7 @@ SQLite 使用 `PRAGMA user_version` 记录 schema。迁移按 `internal/store/mi
 
 新增列全部为 `NOT NULL DEFAULT ''`，迁移是纯加法，旧二进制仍能读取未知列之外的字段。但 `runMigrations` 会因 `user_version` 高于支持值拒绝启动，所以**回退只能靠备份，不能原地降级**。
 
-v11 的数据回填（账号分列、继承既有代理、项目路径、默认模型）不在迁移事务里做：它同时需要 config.json 与数据目录，只有 server 层能拿到。回填幂等且只填空值，服务启动时在 reconcile 之前执行；没有既有账号代理时留空，不自动挑选池中代理或改变旧实例出口。默认模型只回填原工具对应列，不跨 Claude/Codex 继承。回填后仍缺少可用代理的实例会拒绝启动；`proxy_bridge.require_instance_proxy=false` 是管理员显式允许旧实例直连的应急开关，不是新建实例省略住宅代理的通道。`AGENTBOX_MIGRATE_DRYRUN=1` 只跳过服务器数据回填，不能阻止更早发生的 SQLite schema 迁移，须在备份副本上使用。
+v11 的数据回填（账号分列、继承既有代理、项目路径、默认模型）不在迁移事务里做：它同时需要 config.json 与数据目录，只有 server 层能拿到。回填幂等且只填空值，服务启动时在 reconcile 之前执行；没有既有账号代理时留空，不自动挑选池中代理或改变旧实例出口。默认模型只回填原工具对应列，不跨 Claude/Codex 继承。实例代理是可选项：未绑定代理的实例（含回填后仍为空的旧实例）走服务器直连；管理员设置 `proxy_bridge.require_instance_proxy=true` 可改为强制绑定，此时未绑定的实例拒绝创建/启动。已绑定但失效（停用/悬空/机房）的代理始终 fail-closed，不回落直连。`AGENTBOX_MIGRATE_DRYRUN=1` 只跳过服务器数据回填，不能阻止更早发生的 SQLite schema 迁移，须在备份副本上使用。
 
 新容器同时挂载 `/workspace` 与宿主工作目录；旧容器保留原挂载和容器 ID，不因 schema 升级、挂载差异或镜像更新而自动删除重建。旧容器无法安全复用时明确报错，迁移须另行授权。服务器目录、容器内路径与 Mac 本机目录不是同一概念；每项目任意独立本机目录映射仍待实现，不能把 `sync_projects.path` 当成本机路径配置。
 

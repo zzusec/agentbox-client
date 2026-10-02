@@ -3,7 +3,9 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -146,7 +148,7 @@ func TestTermCommandKeepsFallbackAndAttach(t *testing.T) {
 	if !strings.HasPrefix(cmd, "command -v tmux >/dev/null || exec /bin/bash\n") {
 		t.Errorf("pre-tmux image fallback lost:\n%s", cmd)
 	}
-	if !strings.HasSuffix(cmd, "exec tmux -u new-session -A -D -s main") {
+	if !strings.HasSuffix(cmd, tmuxAttach("new-session -A -D -s main")) {
 		t.Errorf("attach must be the last thing exec'd:\n%s", cmd)
 	}
 	// The sync block must not be able to write to the PTY or abort the attach.
@@ -242,5 +244,47 @@ func TestShellTermCommandIsolatesTabs(t *testing.T) {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("missing %q in:\n%s", want, cmd)
 		}
+	}
+}
+
+// TestTmuxAttachAvoidsTheAlternateScreen runs the generated script against a
+// stand-in tmux: the first attach must set the override before attaching, and
+// a later one must not append it again.
+func TestTmuxAttachAvoidsTheAlternateScreen(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "calls")
+	state := filepath.Join(dir, "has-override")
+	fake := `#!/bin/sh
+if [ "$1" = show-options ]; then
+  [ -f ` + state + ` ] && echo '*:smcup@:rmcup@'
+  exit 0
+fi
+printf '%s|' "$@" >> ` + logPath + `
+echo >> ` + logPath + `
+`
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func() string {
+		t.Helper()
+		_ = os.Remove(logPath)
+		cmd := exec.Command("/bin/bash", "-c", termCommand(nil))
+		cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("script failed: %v %s", err, out)
+		}
+		raw, _ := os.ReadFile(logPath)
+		return string(raw)
+	}
+	first := run()
+	want := "-u|start-server|;|set-option|-sa|terminal-overrides|" + tmuxNoAltScreen + "|;|new-session|-A|-D|-s|main|"
+	if !strings.Contains(first, want) {
+		t.Fatalf("first attach = %q, want %q", first, want)
+	}
+	if err := os.WriteFile(state, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if again := run(); strings.Contains(again, "set-option") || !strings.Contains(again, "-u|new-session|-A|-D|-s|main|") {
+		t.Fatalf("later attach = %q", again)
 	}
 }

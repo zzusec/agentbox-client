@@ -149,7 +149,7 @@ func TestResolveInstanceProxyRequiresResidential(t *testing.T) {
 	}{
 		{name: "residential", id: instanceResProxy},
 		{name: "datacenter", id: instanceDCProxy, wantErr: true},
-		{name: "missing", id: "", wantErr: true},
+		{name: "missing means direct", id: ""},
 		{name: "unknown", id: "nope", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -166,6 +166,12 @@ func TestResolveInstanceProxyRequiresResidential(t *testing.T) {
 			}
 		})
 	}
+	// An operator can still make the proxy mandatory.
+	require := true
+	s.cfg.ProxyBridge.RequireInstanceProxy = &require
+	if got, ok := s.resolveInstanceProxy(httptest.NewRecorder(), ""); ok {
+		t.Fatalf("require_instance_proxy=true accepted %q", got)
+	}
 }
 
 func TestCreateInstanceRejectsBeforeCreatingAnything(t *testing.T) {
@@ -174,7 +180,6 @@ func TestCreateInstanceRejectsBeforeCreatingAnything(t *testing.T) {
 		body string
 	}{
 		{"no account", `{"name":"a","proxy_id":"px-res"}`},
-		{"no proxy", `{"name":"a","claude_account_id":"claude-1"}`},
 		{"datacenter proxy", `{"name":"a","claude_account_id":"claude-1","proxy_id":"px-dc"}`},
 		{"unknown proxy", `{"name":"a","claude_account_id":"claude-1","proxy_id":"nope"}`},
 		{"account type mismatch", `{"name":"a","claude_account_id":"codex-1","proxy_id":"px-res"}`},
@@ -195,10 +200,12 @@ func TestCreateInstanceRejectsBeforeCreatingAnything(t *testing.T) {
 }
 
 // Legacy callers (the macOS app, abox-sync, saved scripts) still send the
-// pre-instance pair. It must reach the same validation, including the now
-// mandatory proxy.
+// pre-instance pair. It must reach the same validation, including the proxy
+// when the operator made it mandatory.
 func TestCreateInstanceValidatesLegacyPair(t *testing.T) {
 	s := newInstanceServer(t)
+	require := true
+	s.cfg.ProxyBridge.RequireInstanceProxy = &require
 	w := createInstance(t, s, `{"name":"legacy","agent":"claude","account_id":"claude-1"}`)
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "代理") {
 		t.Fatalf("legacy create without proxy: %d %s", w.Code, w.Body.String())

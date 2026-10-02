@@ -77,8 +77,11 @@ extension TerminalView {
         // Get the ascent + descent + leading from the font, already scaled for the font's size
         self.cellDimension = computeFontDimensions ()
 
+        // agentbox: keep a long history so earlier output can be scrolled
+        // back to (the default of 500 lines runs out within one agent turn).
         let terminalOptions = TerminalOptions(cols: Int(width / cellDimension.width),
-                                              rows: Int(height / cellDimension.height))
+                                              rows: Int(height / cellDimension.height),
+                                              scrollback: 10000)
 
         if terminal == nil {
             terminal = Terminal(delegate: self, options: terminalOptions)
