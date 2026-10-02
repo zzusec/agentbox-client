@@ -88,6 +88,47 @@ final class TerminalSurface: TerminalView {
         self.menu = menu
     }
 
+    /// ⌘V with files or an image on the clipboard uploads them, the same as
+    /// dropping them: files copied in Finder arrive as file URLs, a screenshot
+    /// copied with ⌃⇧⌘4 arrives as image data with no text. Anything with text
+    /// pastes as text, as before.
+    override func paste(_ sender: Any) {
+        let board = NSPasteboard.general
+        let files = board.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] ?? []
+        if !files.isEmpty {
+            onDropFiles?(files)
+            return
+        }
+        if board.string(forType: .string) == nil, let image = Self.pastedImageFile(board) {
+            onDropFiles?([image])
+            return
+        }
+        super.paste(sender)
+    }
+
+    /// Writes clipboard image data to a temporary PNG so it can be uploaded
+    /// like any dropped file.
+    static func pastedImageFile(_ board: NSPasteboard) -> URL? {
+        var png = board.data(forType: .png)
+        if png == nil, let tiff = board.data(forType: .tiff), let rep = NSBitmapImageRep(data: tiff) {
+            png = rep.representation(using: .png, properties: [:])
+        }
+        guard let png else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pasted-\(formatter.string(from: Date())).png")
+        do {
+            try png.write(to: url, options: .atomic)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         droppedURLs(sender).isEmpty ? [] : .copy
     }

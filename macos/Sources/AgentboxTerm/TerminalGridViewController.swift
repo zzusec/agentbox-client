@@ -91,12 +91,17 @@ final class TerminalGridViewController: NSViewController {
 
     func contains(workspaceID: String, projectName: String) -> TerminalViewController? {
         terminals.first {
-            $0.workspace.id == workspaceID && $0.project.name == projectName
+            $0.workspace.id == workspaceID && $0.project.name == projectName && $0.kind == .agent
         }
     }
 
-    func add(client: AgentboxClient, workspace: Workspace, project: RemoteProject) -> TerminalViewController {
-        let terminal = TerminalViewController(client: client, workspace: workspace, project: project)
+    func add(
+        client: AgentboxClient,
+        workspace: Workspace,
+        project: RemoteProject,
+        kind: TerminalKind = .agent
+    ) -> TerminalViewController {
+        let terminal = TerminalViewController(client: client, workspace: workspace, project: project, kind: kind)
         terminal.onClose = { [weak self, weak terminal] in
             guard let self, let terminal else { return }
             self.remove(terminal)
@@ -141,7 +146,7 @@ final class TerminalGridViewController: NSViewController {
         ])
         rebuildTabs()
         updateEmptyState()
-        view.window?.title = terminal.project.name
+        view.window?.title = terminal.tabTitle
         terminal.refitPTY()
         terminal.activateTerminal()
     }
@@ -178,7 +183,7 @@ final class TerminalGridViewController: NSViewController {
         tabBar.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for terminal in terminals {
             let chip = TerminalTabChip(
-                title: terminal.project.name,
+                title: terminal.tabTitle,
                 path: terminal.project.path,
                 state: terminal.connectionState
             )

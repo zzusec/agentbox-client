@@ -14,7 +14,10 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     var onSyncProjectNow: ((RemoteProject, String) -> Void)?
     /// Reveals the sync log, which is the only durable record of what a pass did.
     var onOpenSyncLog: (() -> Void)?
+    /// The project's AI session (double-click, or "打开 AI 会话").
     var onOpenProject: ((RemoteProject) -> Void)?
+    /// A new plain shell in the instance container ("打开终端").
+    var onOpenShell: ((RemoteProject) -> Void)?
     var onCopyProjectPath: ((RemoteProject) -> Void)?
     var onDeleteProject: ((RemoteProject) -> Void)?
     /// Current per-project sync policy, for the checkmark in the submenu.
@@ -44,6 +47,20 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     @objc private func openClicked() {
         guard let menuProject else { return }
         onOpenProject?(menuProject)
+    }
+
+    @objc private func openShellClicked() {
+        guard let menuProject else { return }
+        onOpenShell?(menuProject)
+    }
+
+    /// Double-click always opens (or brings forward) the project's terminal,
+    /// even when its row is already selected — selection alone does not fire
+    /// again for a row that is selected.
+    @objc private func projectDoubleClicked() {
+        let row = projectTable.clickedRow
+        guard row >= 0, row < projects.count else { return }
+        onOpenProject?(projects[row])
     }
 
     @objc private func copyPathClicked() {
@@ -291,6 +308,8 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
         column.resizingMask = .autoresizingMask
         projectTable.addTableColumn(column)
         projectTable.headerView = nil
+        projectTable.target = self
+        projectTable.doubleAction = #selector(projectDoubleClicked)
         projectTable.style = .sourceList
         projectTable.rowHeight = 44
         projectTable.intercellSpacing = NSSize(width: 0, height: 2)
@@ -477,7 +496,8 @@ extension SidebarViewController: NSMenuDelegate {
             return item
         }
 
-        menu.addItem(item("打开终端", "play", #selector(openClicked)))
+        menu.addItem(item("打开终端", "terminal", #selector(openShellClicked)))
+        menu.addItem(item("打开 AI 会话", "play", #selector(openClicked)))
         menu.addItem(item("复制路径", "doc.on.doc", #selector(copyPathClicked)))
         menu.addItem(.separator())
         menu.addItem(item("修改项目名称…", "pencil", #selector(renameClicked)))

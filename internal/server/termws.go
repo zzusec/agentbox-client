@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -116,18 +117,62 @@ func agentTmuxSession(project string) string {
 type terminalRequest struct {
 	mode    string
 	project string
+	// tab names one independent shell. Without it, mode=shell keeps the
+	// shared "main" session the browser terminal has always attached to.
+	tab string
+}
+
+// shellTabRe keeps a client-chosen tab ID to something that is safe in a
+// tmux session name and needs no quoting thought anywhere it travels.
+var shellTabRe = regexp.MustCompile(`^[A-Za-z0-9-]{1,40}$`)
+
+// shellTmuxSession names the tmux session behind one shell tab. Hashing keeps
+// arbitrary project names out of tmux's target syntax, and the "shell-"
+// prefix keeps tabs from ever colliding with "main" or an agent session.
+func shellTmuxSession(project, tab string) string {
+	sum := sha256.Sum256([]byte(project + "\x00" + tab))
+	return "shell-" + hex.EncodeToString(sum[:])[:12]
+}
+
+// shellTermCommand opens one shell tab: a tmux session of its own, started in
+// the project directory, so several tabs can run side by side and each one
+// survives a reconnect. -A -D re-attaches the same tab and displaces a stale
+// client, exactly like the agent and "main" sessions.
+func shellTermCommand(env []string, dir, session string) string {
+	cmd := "command -v tmux >/dev/null || { cd " + shellQuote(dir) + " && exec /bin/bash -l; }\n"
+	if sync := tmuxEnvSync(env); sync != "" {
+		cmd += "{ " + sync + "} >/dev/null 2>&1\n"
+	}
+	return cmd + "exec tmux -u new-session -A -D -s " + shellQuote(session) + " -c " + shellQuote(dir)
 }
 
 func parseTerminalRequest(r *http.Request) (terminalRequest, error) {
 	req := terminalRequest{
 		mode:    strings.TrimSpace(r.URL.Query().Get("mode")),
 		project: strings.TrimSpace(r.URL.Query().Get("project")),
+		tab:     strings.TrimSpace(r.URL.Query().Get("tab")),
 	}
 	if req.mode == "" {
 		req.mode = "shell"
 	}
 	switch req.mode {
 	case "shell":
+		if req.tab == "" {
+			if req.project != "" {
+				return terminalRequest{}, fmt.Errorf("项目终端需要 tab")
+			}
+			return req, nil
+		}
+		if !shellTabRe.MatchString(req.tab) {
+			return terminalRequest{}, fmt.Errorf("终端标签无效")
+		}
+		if req.project != "" {
+			project, ok := validFileName(req.project)
+			if !ok {
+				return terminalRequest{}, fmt.Errorf("项目名称无效")
+			}
+			req.project = project
+		}
 		return req, nil
 	case "agent":
 		project, ok := validFileName(req.project)
@@ -205,7 +250,7 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request, sess store
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if termReq.mode == "agent" {
+	if termReq.project != "" {
 		root, err := s.openDataDir(s.workspaceDir(sess))
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, "工作空间不可用")
@@ -277,8 +322,15 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request, sess store
 	}
 	command := termCommand(env)
 	workDir := s.containerWorkspace(r.Context(), sess)
-	if termReq.mode == "agent" {
+	switch {
+	case termReq.mode == "agent":
 		command = agentTermCommand(env, termReq.project, launch, workDir)
+	case termReq.tab != "":
+		dir := workDir
+		if termReq.project != "" {
+			dir = filepath.Join(workDir, termReq.project)
+		}
+		command = shellTermCommand(env, dir, shellTmuxSession(termReq.project, termReq.tab))
 	}
 	pty, err := s.dock.ExecPTY(r.Context(), sess.ContainerID, []string{"/bin/bash", "-c", command}, env, workDir)
 	if err != nil {
@@ -393,4 +445,32 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request, sess store
 			}
 		}
 	}
+}
+
+// handleShellClose ends one shell tab when the client closes it. Without this
+// every closed tab would leave its tmux session — and whatever it was running
+// — alive in the container forever, since a dropped connection only detaches.
+// Best effort: a stopped container or an already-gone session is success.
+func (s *Server) handleShellClose(w http.ResponseWriter, r *http.Request, sess store.Session) {
+	tab := strings.TrimSpace(r.PathValue("tab"))
+	if !shellTabRe.MatchString(tab) {
+		writeErr(w, http.StatusBadRequest, "终端标签无效")
+		return
+	}
+	project := strings.TrimSpace(r.URL.Query().Get("project"))
+	if project != "" {
+		name, ok := validFileName(project)
+		if !ok {
+			writeErr(w, http.StatusBadRequest, "项目名称无效")
+			return
+		}
+		project = name
+	}
+	if s.dock != nil && sess.ContainerID != "" {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		_, _ = s.dock.ExecCapture(ctx, sess.ContainerID,
+			[]string{"tmux", "kill-session", "-t", "=" + shellTmuxSession(project, tab)}, nil, "")
+		cancel()
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

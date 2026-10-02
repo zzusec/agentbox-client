@@ -562,6 +562,63 @@ struct AppSmokeChecks {
         controller.handleUploadNote(note(.finished(bytes: 2048, milliseconds: 1500)))
         precondition(!controller.isSyncing && controller.syncStatusText.contains("1.5s"), "got \(controller.syncStatusText)")
 
+        // Hiding the sidebar removes it from the split view, so no strip of
+        // window background is left framing the terminal; showing restores it.
+        precondition(controller.isSidebarVisible)
+        _ = controller.perform(NSSelectorFromString("toggleSidebar:"), with: nil)
+        precondition(!controller.isSidebarVisible, "the sidebar must leave the split view when hidden")
+        precondition(
+            views(in: controller.view).compactMap { $0 as? NSSplitView }.first?.arrangedSubviews.count == 1,
+            "only the terminal may remain in the split view"
+        )
+        _ = controller.perform(NSSelectorFromString("toggleSidebar:"), with: nil)
+        precondition(controller.isSidebarVisible, "showing the sidebar must put it back")
+
+        // Shell tabs: their own mode, tab ID and title; the agent tab is unchanged.
+        let shellWorkspace = try! JSONDecoder().decode(
+            Workspace.self,
+            from: Data(#"{"id":"w","name":"w","agent":"claude","account_id":"a","account_label":"l"}"#.utf8)
+        )
+        let shellURL = URLComponents(
+            url: client.terminalURL(workspace: shellWorkspace, project: "demo", kind: .shell(id: "ab12", index: 2))!,
+            resolvingAgainstBaseURL: false
+        )!
+        precondition(shellURL.queryItems!.contains(URLQueryItem(name: "mode", value: "shell")))
+        precondition(shellURL.queryItems!.contains(URLQueryItem(name: "tab", value: "ab12")))
+        precondition(shellURL.queryItems!.contains(URLQueryItem(name: "project", value: "demo")))
+        let shellTab = TerminalViewController(
+            client: client, workspace: shellWorkspace,
+            project: RemoteProject(id: "p", name: "demo", path: "/w/demo"),
+            kind: .shell(id: "ab12", index: 2)
+        )
+        precondition(shellTab.tabTitle == "demo · 终端 2")
+        precondition(shellTab.paneKey != "w/demo", "a shell tab must not take the agent tab's key")
+
+        // Right-click offers a new shell and the AI session; double-click opens.
+        let menuSidebar = SidebarViewController()
+        menuSidebar.loadViewIfNeeded()
+        let menu = NSMenu()
+        menuSidebar.populate(menu, with: RemoteProject(id: "p", name: "demo", path: "/w/demo"))
+        let titles = menu.items.map(\.title)
+        precondition(titles.contains("打开终端") && titles.contains("打开 AI 会话"), "menu: \(titles)")
+        let projectTable = views(in: menuSidebar.view).compactMap { $0 as? NSTableView }.first!
+        precondition(projectTable.doubleAction != nil, "double-clicking a project must open it")
+
+        // ⌘V with an image and no text becomes a PNG file to upload.
+        let board = NSPasteboard(name: NSPasteboard.Name("agentbox.smoke.paste"))
+        board.clearContents()
+        let image = NSImage(size: NSSize(width: 4, height: 4))
+        image.lockFocus()
+        NSColor.systemRed.setFill()
+        NSRect(x: 0, y: 0, width: 4, height: 4).fill()
+        image.unlockFocus()
+        board.writeObjects([image])
+        guard let pasted = TerminalSurface.pastedImageFile(board) else {
+            preconditionFailure("an image on the clipboard must become a file")
+        }
+        precondition(pasted.pathExtension == "png" && FileManager.default.fileExists(atPath: pasted.path))
+        try? FileManager.default.removeItem(at: pasted)
+
         // Double-clicking the title bar zooms; a click in the content does not count.
         let blank = NSViewController()
         blank.view = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))

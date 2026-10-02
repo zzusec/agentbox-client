@@ -426,6 +426,7 @@ data/
 
 - `GET /api/sessions/{id}/term` 自动启动会话后 `docker exec` 进容器。
 - 默认 attach 到持久 tmux 会话 `main`（老镜像回退 bash），断线重连不丢 shell/agent 状态。
+- `mode=shell&tab=<id>[&project=<名>]` 是**独立 shell 标签**（Mac 客户端右键「打开终端」）：每个 tab 一个 tmux 会话（`shellTmuxSession`，按 项目+tab 哈希，带 `shell-` 前缀，不会撞 `main` 和 agent 会话），起始目录为项目目录；同一 tab 重连仍 `-A -D` 接回。tab 只接受 `[A-Za-z0-9-]{1,40}`；带 project 必须带 tab。关闭标签时客户端调 `DELETE /api/sessions/{id}/term/shells/{tab}?project=` 执行 `tmux kill-session`，否则每关一个标签就在容器里留一个常驻 shell。不带 tab 的 `mode=shell` 行为不变（网页终端）。
 - WebSocket 二进制帧是原始 PTY 字节；文本帧只接受 `{"type":"resize","cols":...,"rows":...}`。
 - **额度见底的用户进不来**，口径与对话页一致（没额度行 = 不限额；只计不拦照常进）。
   两道关：进门前查一次（在 `startSession` 之前，欠费用户连容器都不拉起），以及每个

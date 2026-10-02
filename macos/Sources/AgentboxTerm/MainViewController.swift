@@ -41,6 +41,8 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     /// The newest transfer, for the summary line once a pass settles.
     private var lastTransferLine: String?
     private var uploadObserver: NSObjectProtocol?
+    /// How many shell tabs each project has opened, for "终端 N" titles.
+    private var shellCounts: [String: Int] = [:]
     private static let clockFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
@@ -435,6 +437,9 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             guard let self, let workspace = self.workspace else { return nil }
             return self.projectSettings(for: workspace)[project.id]?.policy
         }
+        sidebar.onOpenShell = { [weak self] project in
+            self?.openShell(project)
+        }
         sidebar.onOpenProject = { [weak self] project in
             self?.open(project)
         }
@@ -516,6 +521,18 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         }
         let terminal = terminalGrid.add(client: client, workspace: workspace, project: project)
         terminals[key] = terminal
+    }
+
+    /// A new shell tab in the instance container, starting in the project
+    /// directory. Unlike the AI session there is no "already open" check:
+    /// every request is another independent shell.
+    private func openShell(_ project: RemoteProject) {
+        guard let workspace else { return }
+        let key = "\(workspace.id)/\(project.name)"
+        let index = (shellCounts[key] ?? 0) + 1
+        shellCounts[key] = index
+        let id = String(UUID().uuidString.lowercased().prefix(8))
+        _ = terminalGrid.add(client: client, workspace: workspace, project: project, kind: .shell(id: id, index: index))
     }
 
     private func chooseLocalRoot() {
@@ -1116,20 +1133,35 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         }
     }
 
+    /// Hiding the sidebar takes it out of the split view instead of just
+    /// hiding it. A hidden arranged subview keeps its slot and the divider,
+    /// which left a strip of window background framing the terminal; with the
+    /// sidebar removed the terminal runs edge to edge.
     @objc private func toggleSidebar(_ sender: Any?) {
         guard !sidebarCollapsed else {
             sidebarCollapsed = false
+            splitView.insertArrangedSubview(sidebar.view, at: 0)
             sidebar.view.isHidden = false
+            splitView.setHoldingPriority(.defaultHigh, forSubviewAt: 0)
             splitView.adjustSubviews()
             splitView.setPosition(max(250, sidebarWidth), ofDividerAt: 0)
+            view.layer?.backgroundColor = NativeTheme.content.cgColor
             return
         }
 
         sidebarWidth = max(250, sidebar.view.frame.width)
         sidebarCollapsed = true
-        sidebar.view.isHidden = true
+        splitView.removeArrangedSubview(sidebar.view)
+        sidebar.view.removeFromSuperview()
         splitView.adjustSubviews()
+        // Anything not covered by the terminal now reads as terminal, not as
+        // a light frame around it.
+        view.layer?.backgroundColor = NativeTheme.terminalBackground.cgColor
+        terminalGrid.view.needsLayout = true
     }
+
+    /// Whether the project sidebar is showing; for the smoke checks.
+    var isSidebarVisible: Bool { !sidebarCollapsed && sidebar.view.superview === splitView }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [toolbarSidebar, .flexibleSpace, toolbarSettings]

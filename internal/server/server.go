@@ -423,6 +423,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/sessions/{id}/browser/clipboard", s.auth(s.withSession(s.handleBrowserClipboard)))
 	mux.Handle("GET /api/sessions/{id}/browser/desktop", s.auth(s.withSession(s.handleBrowserWS)))
 	mux.Handle("GET /api/sessions/{id}/term", s.auth(s.withSession(s.handleTermWS)))
+	mux.Handle("DELETE /api/sessions/{id}/term/shells/{tab}", s.auth(s.withSession(s.handleShellClose)))
 	mux.Handle("GET /api/sessions/{id}/chat", s.auth(s.withSession(s.handleChatWS)))
 	mux.Handle("GET /api/sessions/{id}/chat/threads", s.auth(s.withSession(s.handleThreadList)))
 	mux.Handle("POST /api/sessions/{id}/chat/threads", s.auth(s.withSession(s.handleThreadNew)))

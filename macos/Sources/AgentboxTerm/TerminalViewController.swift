@@ -1,6 +1,14 @@
 import AppKit
 import SwiftTerm
 
+/// What a terminal tab is attached to. The agent tab is the project's single
+/// Claude/Codex session; shell tabs are plain shells in the instance
+/// container, as many as the user opens, each with its own tmux session.
+enum TerminalKind: Equatable {
+    case agent
+    case shell(id: String, index: Int)
+}
+
 enum TerminalConnectionState {
     case connecting
     case connected
@@ -10,6 +18,7 @@ enum TerminalConnectionState {
 final class TerminalViewController: NSViewController, TerminalViewDelegate {
     let workspace: Workspace
     let project: RemoteProject
+    let kind: TerminalKind
     let paneKey: String
     /// Dismiss the terminal to the background (the instance keeps running).
     var onClose: (() -> Void)?
@@ -26,11 +35,27 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
     private let surface: TerminalSurface
     private var bridge: TerminalBridge?
 
-    init(client: AgentboxClient, workspace: Workspace, project: RemoteProject) {
+    /// Keystrokes typed while a dropped or pasted file is still uploading.
+    /// The file's path is inserted only once the upload finishes; sending the
+    /// typing straight through would put the path in the middle of it.
+    private var heldInput = Data()
+    private var uploadBatches = 0
+    private var uploadTasks: [UUID: Task<Void, Never>] = [:]
+    private let uploadBanner = NSVisualEffectView()
+    private let uploadLabel = NSTextField(labelWithString: "")
+    private let uploadBar = NSProgressIndicator()
+
+    init(client: AgentboxClient, workspace: Workspace, project: RemoteProject, kind: TerminalKind = .agent) {
         self.client = client
         self.workspace = workspace
         self.project = project
-        self.paneKey = "\(workspace.id)/\(project.name)"
+        self.kind = kind
+        switch kind {
+        case .agent:
+            self.paneKey = "\(workspace.id)/\(project.name)"
+        case let .shell(id, _):
+            self.paneKey = "\(workspace.id)/\(project.name)#shell-\(id)"
+        }
         self.surface = TerminalSurface(
             frame: .zero,
             font: NativeTheme.terminalFont()
@@ -54,6 +79,13 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
             surface.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             surface.topAnchor.constraint(equalTo: root.topAnchor),
             surface.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+        ])
+        root.addSubview(buildUploadBanner())
+        NSLayoutConstraint.activate([
+            uploadBanner.topAnchor.constraint(equalTo: root.topAnchor, constant: 8),
+            uploadBanner.centerXAnchor.constraint(equalTo: root.centerXAnchor),
+            uploadBanner.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -24),
+            uploadBanner.widthAnchor.constraint(greaterThanOrEqualToConstant: 320),
         ])
         view = root
     }
@@ -93,9 +125,28 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         view.window?.makeFirstResponder(surface)
     }
 
+    /// The tab chip's title: the project for its agent session, "终端 N" for
+    /// each extra shell.
+    var tabTitle: String {
+        switch kind {
+        case .agent:
+            return project.name
+        case let .shell(_, index):
+            return "\(project.name) · 终端 \(index)"
+        }
+    }
+
     func closeSession() {
+        cancelUploads()
         bridge?.close()
         bridge = nil
+        // A shell tab is gone for good once closed; end its tmux session so
+        // it does not keep running in the container. The agent session is
+        // kept on purpose — reopening the project reattaches to it.
+        if case let .shell(id, _) = kind {
+            let client = client, workspace = workspace, project = project.name
+            Task { try? await client.closeShell(tab: id, project: project, in: workspace) }
+        }
     }
 
     func activateTerminal() {
@@ -116,7 +167,7 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
     }
 
     private func connect() {
-        guard let url = client.terminalURL(workspace: workspace, project: project.name) else {
+        guard let url = client.terminalURL(workspace: workspace, project: project.name, kind: kind) else {
             surface.feed(text: "\r\n无法生成终端连接地址。\r\n")
             setConnection(.error)
             return
@@ -152,25 +203,95 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         onConnectionState?(state)
     }
 
+    /// A floating strip over the top of the terminal while files upload: what
+    /// is going up, how far along it is, and a way to give up.
+    private func buildUploadBanner() -> NSView {
+        uploadBanner.material = .hudWindow
+        uploadBanner.blendingMode = .withinWindow
+        uploadBanner.state = .active
+        uploadBanner.wantsLayer = true
+        uploadBanner.layer?.cornerRadius = 8
+        uploadBanner.isHidden = true
+        uploadBanner.translatesAutoresizingMaskIntoConstraints = false
+
+        uploadLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        uploadLabel.textColor = .labelColor
+        uploadLabel.lineBreakMode = .byTruncatingMiddle
+        uploadLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        uploadBar.style = .bar
+        uploadBar.controlSize = .small
+        uploadBar.minValue = 0
+        uploadBar.maxValue = 1
+        uploadBar.isIndeterminate = false
+        let hint = NSTextField(labelWithString: "继续输入的内容会在路径插入后接上")
+        hint.font = .systemFont(ofSize: 10)
+        hint.textColor = .secondaryLabelColor
+        let cancel = NSButton(title: "取消", target: self, action: #selector(cancelUploads))
+        cancel.bezelStyle = .rounded
+        cancel.controlSize = .small
+
+        let text = NSStackView(views: [uploadLabel, uploadBar, hint])
+        text.orientation = .vertical
+        text.alignment = .leading
+        text.spacing = 4
+        let row = NSStackView(views: [text, cancel])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 12
+        row.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 10)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        uploadBanner.addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: uploadBanner.leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: uploadBanner.trailingAnchor),
+            row.topAnchor.constraint(equalTo: uploadBanner.topAnchor),
+            row.bottomAnchor.constraint(equalTo: uploadBanner.bottomAnchor),
+            uploadBar.widthAnchor.constraint(equalTo: text.widthAnchor),
+        ])
+        return uploadBanner
+    }
+
+    private func showUpload(file: String, index: Int, count: Int, fraction: Double) {
+        let position = count > 1 ? "（\(index)/\(count)）" : ""
+        uploadLabel.stringValue = "正在上传 \(file)\(position) — \(Int((fraction * 100).rounded()))%"
+        uploadBar.doubleValue = fraction
+        uploadBanner.isHidden = false
+    }
+
+    @objc private func cancelUploads() {
+        uploadTasks.values.forEach { $0.cancel() }
+    }
+
+    /// Uploads dropped or pasted files, then types their server paths.
+    ///
+    /// Input is held for the whole batch: the path goes where the drop
+    /// happened, and whatever was typed meanwhile follows it in order.
     private func upload(_ urls: [URL]) {
-        Task { @MainActor in
+        let id = UUID()
+        uploadBatches += 1
+        showUpload(file: urls.first?.lastPathComponent ?? "", index: 1, count: urls.count, fraction: 0)
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
             var serverPaths: [String] = []
-            for url in urls {
+            for (offset, url) in urls.enumerated() {
+                if Task.isCancelled { break }
                 let file = url.lastPathComponent
                 let projectName = project.name
                 let started = Date()
                 // Progress hops to the main queue asynchronously and can land
                 // after the upload returned; it must not reopen a finished bar.
                 let settled = UploadSettled()
+                showUpload(file: file, index: offset + 1, count: urls.count, fraction: 0)
                 UploadProgressNote.post(file: file, project: projectName, state: .running(fraction: 0))
                 do {
                     let remote = try await client.upload(
                         file: url,
                         workspace: workspace,
                         project: projectName,
-                        onProgress: { fraction in
+                        onProgress: { [weak self] fraction in
                             DispatchQueue.main.async {
                                 guard !settled.value else { return }
+                                self?.showUpload(file: file, index: offset + 1, count: urls.count, fraction: fraction)
                                 UploadProgressNote.post(file: file, project: projectName, state: .running(fraction: fraction))
                             }
                         }
@@ -187,27 +308,46 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
                     }
                 } catch {
                     settled.value = true
+                    let cancelled = Task.isCancelled || (error as? URLError)?.code == .cancelled
                     UploadProgressNote.post(
                         file: file, project: projectName,
-                        state: .failed(message: error.localizedDescription)
+                        state: .failed(message: cancelled ? "已取消" : error.localizedDescription)
                     )
+                    if cancelled { break }
                     let alert = NSAlert()
                     alert.messageText = "上传失败"
-                    alert.informativeText = "\(url.lastPathComponent)：\(error.localizedDescription)"
+                    alert.informativeText = "\(file)：\(error.localizedDescription)"
                     alert.alertStyle = .warning
                     alert.runModal()
                 }
             }
-            guard !serverPaths.isEmpty else { return }
+            finishUpload(id: id, serverPaths: serverPaths)
+        }
+        uploadTasks[id] = task
+    }
+
+    /// Types the uploaded paths, then releases whatever was typed meanwhile —
+    /// in that order, which is the whole point of holding it.
+    private func finishUpload(id: UUID, serverPaths: [String]) {
+        uploadTasks.removeValue(forKey: id)
+        if !serverPaths.isEmpty {
             let text = serverPaths.map(shellQuote).joined(separator: " ")
             let terminal = surface.getTerminal()
             if terminal.bracketedPasteMode {
-                surface.send(txt: "\u{001B}[200~\(text)\u{001B}[201~")
+                bridge?.send(data: Data("\u{001B}[200~\(text)\u{001B}[201~".utf8))
             } else {
-                surface.send(txt: text)
+                bridge?.send(data: Data(text.utf8))
             }
-            surface.window?.makeFirstResponder(surface)
         }
+        uploadBatches = max(0, uploadBatches - 1)
+        if uploadBatches == 0 {
+            uploadBanner.isHidden = true
+            if !heldInput.isEmpty {
+                bridge?.send(data: heldInput)
+                heldInput.removeAll()
+            }
+        }
+        surface.window?.makeFirstResponder(surface)
     }
 
     private func shellQuote(_ value: String) -> String {
@@ -220,12 +360,16 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
 
     func setTerminalTitle(source: TerminalView, title: String) {
         guard isActive else { return }
-        view.window?.title = "\(project.name) · \(title)"
+        view.window?.title = "\(tabTitle) · \(title)"
     }
 
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
 
     func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        if uploadBatches > 0 {
+            heldInput.append(contentsOf: data)
+            return
+        }
         bridge?.send(data: Data(data))
     }
 

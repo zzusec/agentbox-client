@@ -135,18 +135,39 @@ final class AgentboxClient {
         return result.containerPath
     }
 
-    func terminalURL(workspace: Workspace, project: String) -> URL? {
+    func terminalURL(workspace: Workspace, project: String, kind: TerminalKind = .agent) -> URL? {
         var components = URLComponents(url: Self.endpoint(
             server,
             "api/sessions/\(escaped(workspace.id))/term"
         ), resolvingAgainstBaseURL: false)
         components?.scheme = server.scheme == "https" ? "wss" : "ws"
-        components?.queryItems = [
-            URLQueryItem(name: "mode", value: "agent"),
-            URLQueryItem(name: "project", value: project),
-            URLQueryItem(name: "token", value: token),
-        ]
+        switch kind {
+        case .agent:
+            components?.queryItems = [
+                URLQueryItem(name: "mode", value: "agent"),
+                URLQueryItem(name: "project", value: project),
+                URLQueryItem(name: "token", value: token),
+            ]
+        case let .shell(id, _):
+            components?.queryItems = [
+                URLQueryItem(name: "mode", value: "shell"),
+                URLQueryItem(name: "project", value: project),
+                URLQueryItem(name: "tab", value: id),
+                URLQueryItem(name: "token", value: token),
+            ]
+        }
         return components?.url
+    }
+
+    /// Ends a shell tab's session in the container once the tab is closed.
+    func closeShell(tab: String, project: String, in workspace: Workspace) async throws {
+        var components = URLComponents(
+            url: Self.endpoint(server, "api/sessions/\(escaped(workspace.id))/term/shells/\(escaped(tab))"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "project", value: project)]
+        guard let url = components?.url else { throw AgentboxClientError.invalidResponse }
+        _ = try await Self.perform(authorizedRequest(url: url, method: "DELETE"), token: token)
     }
 
     private func request<T: Decodable>(_ path: String) async throws -> T {

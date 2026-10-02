@@ -168,6 +168,11 @@ func TestParseTerminalRequest(t *testing.T) {
 		{name: "agent requires project", target: "/term?mode=agent", ok: false},
 		{name: "reject separators", target: "/term?mode=agent&project=a%2Fb", ok: false},
 		{name: "reject unknown mode", target: "/term?mode=other", ok: false},
+		{name: "project shell tab", target: "/term?mode=shell&project=alpha&tab=t-1", mode: "shell", project: "alpha", ok: true},
+		{name: "workspace shell tab", target: "/term?mode=shell&tab=t1", mode: "shell", ok: true},
+		{name: "project shell needs a tab", target: "/term?mode=shell&project=alpha", ok: false},
+		{name: "reject tab syntax", target: "/term?mode=shell&tab=a%3Bb", ok: false},
+		{name: "reject shell separators", target: "/term?mode=shell&project=a%2Fb&tab=t1", ok: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -218,5 +223,24 @@ func TestAgentTermCommandQuotesLaunchCommand(t *testing.T) {
 	want := "cd '/srv/ws/alpha' && exec /bin/bash -c " + shellQuote(launch)
 	if string(out) != want {
 		t.Fatalf("tmux would run:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+// TestShellTermCommandIsolatesTabs pins that each shell tab gets its own tmux
+// session in its project directory, distinct from agent sessions and "main".
+func TestShellTermCommandIsolatesTabs(t *testing.T) {
+	a, b := shellTmuxSession("alpha", "t1"), shellTmuxSession("alpha", "t2")
+	if a == b || a == shellTmuxSession("beta", "t1") || a == agentTmuxSession("alpha") || a == "main" {
+		t.Fatalf("sessions collide: %s %s", a, b)
+	}
+	cmd := shellTermCommand(nil, "/srv/ws/alpha", a)
+	for _, want := range []string{
+		"new-session -A -D -s " + shellQuote(a),
+		"-c '/srv/ws/alpha'",
+		"cd '/srv/ws/alpha' && exec /bin/bash -l",
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("missing %q in:\n%s", want, cmd)
+		}
 	}
 }

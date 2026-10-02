@@ -37,6 +37,24 @@ The local root maps directly to the remote `/workspace`: remote project
 (or use the new-project sheet) to point it at its own directory instead, and to
 choose its sync mode.
 
+## Terminals
+
+Double-click a project to open its AI session (or bring it forward if it is
+already open). Right-click → `打开终端` opens a **new** plain shell in the
+instance container every time, starting in the project directory and titled
+`<project> · 终端 N`; each has its own tmux session, survives reconnects, and is
+ended in the container when its tab is closed. `打开 AI 会话` is also in the
+menu.
+
+Files dropped on a terminal, or pasted with ⌘V (files copied in Finder, or a
+screenshot on the clipboard), are uploaded with a progress bar over the
+terminal and a cancel button. Typing during the upload is held and sent after
+the inserted path, so the path lands where the file was dropped instead of in
+the middle of what you typed.
+
+Hiding the project sidebar (toolbar button) removes it entirely, so the
+terminal fills the window with no frame left behind.
+
 ## Tool and launch command
 
 A project terminal starts the project's tool with a launch command. The
