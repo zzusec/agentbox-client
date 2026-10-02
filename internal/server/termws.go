@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -363,7 +364,17 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request, sess store
 	}
 	defer conn.Close()
 	defer pty.Close()
-	release, ok := s.track(func() { _ = conn.Close(); pty.Close() })
+	// Server shutdown says so with 1012 before tearing the PTY down. Without
+	// it the reader below sees the PTY end and reports a clean 1000 "process
+	// exited", which clients read as "the session was taken over elsewhere"
+	// and deliberately do not reconnect — every restart left terminals dead.
+	var shuttingDown atomic.Bool
+	release, ok := s.track(func() {
+		shuttingDown.Store(true)
+		closeWithReason(conn, websocket.CloseServiceRestart, "server restarting")
+		_ = conn.Close()
+		pty.Close()
+	})
 	if !ok {
 		return
 	}
@@ -397,6 +408,9 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request, sess store
 				}
 			}
 			if err != nil {
+				if shuttingDown.Load() {
+					return
+				}
 				conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 				_ = conn.WriteControl(websocket.CloseMessage,
 					websocket.FormatCloseMessage(websocket.CloseNormalClosure, "process exited"),

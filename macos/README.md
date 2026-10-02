@@ -180,16 +180,16 @@ and currently points to `zzusec/agentbox-client`.
 Create a release artifact with:
 
 ```bash
-macos/scripts/release-app.sh 0.2.13
+macos/scripts/release-app.sh 0.2.14
 ```
 
 This produces:
 
 ```text
-macos/dist/agentbox-client-macos-arm64-v0.2.13.zip
-macos/dist/agentbox-client-macos-arm64-v0.2.13.zip.sha256
-macos/dist/agentbox-client-macos-arm64-v0.2.13.dmg
-macos/dist/agentbox-client-macos-arm64-v0.2.13.dmg.sha256
+macos/dist/agentbox-client-macos-arm64-v0.2.14.zip
+macos/dist/agentbox-client-macos-arm64-v0.2.14.zip.sha256
+macos/dist/agentbox-client-macos-arm64-v0.2.14.dmg
+macos/dist/agentbox-client-macos-arm64-v0.2.14.dmg.sha256
 ```
 
 Without a Mac at hand, run the `macOS client release` workflow
@@ -201,7 +201,7 @@ release with them attached. `macos/Info.plist` must already carry the version.
 The DMG includes an Applications shortcut for drag-to-install. The app is
 ad-hoc signed, not Developer ID signed or notarized.
 
-The GitHub release tag must be `v0.2.13` and the ZIP asset name must remain
+The GitHub release tag must be `v0.2.14` and the ZIP asset name must remain
 stable. Do not publish an update without the checksum file; the client refuses
 archives whose SHA-256 cannot be verified.
 
