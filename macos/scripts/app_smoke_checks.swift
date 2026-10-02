@@ -638,6 +638,15 @@ struct AppSmokeChecks {
         imeSurface.unmarkText()
         precondition(!imeSurface.hasMarkedText() && recorder.sent.count == "你好".utf8.count)
 
+        // "刷新显示" re-aligns the remote size on demand.
+        var refreshed = false
+        imeSurface.onRefreshDisplay = { refreshed = true }
+        guard let refreshItem = imeSurface.menu?.items.first(where: { $0.title == "刷新显示" }) else {
+            preconditionFailure("the terminal menu must offer 刷新显示")
+        }
+        precondition(NSApp.sendAction(refreshItem.action!, to: refreshItem.target, from: refreshItem))
+        precondition(refreshed, "刷新显示 must trigger a resync")
+
         // ⌘V with an image and no text becomes a PNG file to upload.
         let board = NSPasteboard(name: NSPasteboard.Name("agentbox.smoke.paste"))
         board.clearContents()

@@ -96,6 +96,9 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         surface.onDropFiles = { [weak self] urls in
             self?.upload(urls)
         }
+        surface.onRefreshDisplay = { [weak self] in
+            self?.resyncSize()
+        }
         applyTheme()
         NotificationCenter.default.addObserver(
             self, selector: #selector(applyTheme),
@@ -161,9 +164,33 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         view.layoutSubtreeIfNeeded()
         let terminal = surface.getTerminal()
         guard terminal.cols != lastSentCols || terminal.rows != lastSentRows else { return }
-        lastSentCols = terminal.cols
-        lastSentRows = terminal.rows
-        bridge?.resize(cols: terminal.cols, rows: terminal.rows)
+        sendSize(cols: terminal.cols, rows: terminal.rows)
+    }
+
+    private func sendSize(cols: Int, rows: Int) {
+        lastSentCols = cols
+        lastSentRows = rows
+        bridge?.resize(cols: cols, rows: rows)
+    }
+
+    /// Re-aligns the remote terminal with what this view actually shows.
+    ///
+    /// The bottom rows of a TUI (Claude Code's status line) sometimes stayed
+    /// blank until the window was dragged: the tmux window ended up smaller
+    /// than the view, and tmux paints a smaller window into the top of a
+    /// larger client and leaves the rest empty. Re-sending an identical size
+    /// changes nothing — tmux and the program only reflow on a real change —
+    /// so this sends one row less and then the true size, which is exactly
+    /// what dragging the window did.
+    func resyncSize() {
+        view.layoutSubtreeIfNeeded()
+        let terminal = surface.getTerminal()
+        let cols = terminal.cols, rows = terminal.rows
+        guard cols > 0, rows > 1, bridge != nil else { return }
+        bridge?.resize(cols: cols, rows: rows - 1)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            self?.sendSize(cols: cols, rows: rows)
+        }
     }
 
     private func connect() {
@@ -174,9 +201,20 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         }
         let bridge = TerminalBridge(url: url)
         self.bridge = bridge
-        bridge.onData = { [weak self] data in
-            self?.setConnection(.connected)
-            self?.surface.feed(byteArray: ArraySlice(data))
+        // The size sent right after connecting can land before tmux is
+        // attached; once the first output arrives the session is live, so
+        // that is when the size is re-aligned (once per connection).
+        var aligned = false
+        bridge.onData = { [weak self, weak bridge] data in
+            guard let self else { return }
+            self.setConnection(.connected)
+            self.surface.feed(byteArray: ArraySlice(data))
+            if !aligned, let bridge, bridge === self.bridge {
+                aligned = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                    self?.resyncSize()
+                }
+            }
         }
         bridge.onStatus = { [weak self] status in
             guard let self else { return }
@@ -193,7 +231,7 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             let terminal = self.surface.getTerminal()
-            bridge.resize(cols: terminal.cols, rows: terminal.rows)
+            self.sendSize(cols: terminal.cols, rows: terminal.rows)
             self.surface.window?.makeFirstResponder(self.surface)
         }
     }
@@ -355,7 +393,7 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
     }
 
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-        bridge?.resize(cols: newCols, rows: newRows)
+        sendSize(cols: newCols, rows: newRows)
     }
 
     func setTerminalTitle(source: TerminalView, title: String) {

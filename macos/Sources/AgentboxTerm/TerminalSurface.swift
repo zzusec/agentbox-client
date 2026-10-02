@@ -3,6 +3,8 @@ import SwiftTerm
 
 final class TerminalSurface: TerminalView {
     var onDropFiles: (([URL]) -> Void)?
+    /// "刷新显示" in the context menu: re-align the remote size and redraw.
+    var onRefreshDisplay: (() -> Void)?
 
     private var mouseMonitor: Any?
     /// True while a ⇧-drag selection gesture is in flight (smart mode): mouse
@@ -85,7 +87,16 @@ final class TerminalSurface: TerminalView {
         menu.addItem(withTitle: "复制", action: Selector(("copy:")), keyEquivalent: "c")
         menu.addItem(withTitle: "粘贴", action: Selector(("paste:")), keyEquivalent: "v")
         menu.addItem(withTitle: "全选", action: Selector(("selectAll:")), keyEquivalent: "a")
+        menu.addItem(.separator())
+        let refresh = menu.addItem(withTitle: "刷新显示", action: #selector(refreshDisplay(_:)), keyEquivalent: "")
+        refresh.target = self
         self.menu = menu
+    }
+
+    /// Escape hatch for a screen that drew short (blank bottom rows): the same
+    /// re-alignment the terminal does on connect, on demand.
+    @objc func refreshDisplay(_ sender: Any?) {
+        onRefreshDisplay?()
     }
 
     // MARK: - Input method composition (CJK)
