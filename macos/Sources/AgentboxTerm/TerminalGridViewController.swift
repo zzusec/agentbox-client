@@ -26,6 +26,11 @@ final class TerminalGridViewController: NSViewController {
 
         tabBar.orientation = .horizontal
         tabBar.alignment = .centerY
+        // .fill with a trailing spacer, not the default .gravityAreas: the bar
+        // is pinned to both edges, and gravity areas were free to park a tab at
+        // the far right with a gap in front of it. Here the spacer is the only
+        // view that wants to grow, so tabs always sit packed at the left.
+        tabBar.distribution = .fill
         tabBar.spacing = 6
         tabBar.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
         tabBar.translatesAutoresizingMaskIntoConstraints = false
@@ -183,7 +188,9 @@ final class TerminalGridViewController: NSViewController {
     /// of the tab in front, like a browser's new-tab gesture.
     @objc private func tabBarDoubleClicked(_ gesture: NSClickGestureRecognizer) {
         let point = gesture.location(in: tabBar)
-        guard !tabBar.arrangedSubviews.contains(where: { $0.frame.contains(point) }),
+        // Only the chips count as "a tab": the spacer covers the rest of the
+        // bar, which is exactly where this gesture is meant to fire.
+        guard !tabBar.arrangedSubviews.contains(where: { $0 is TerminalTabChip && $0.frame.contains(point) }),
               let anchor = selected ?? terminals.last else { return }
         onNewShell?(anchor)
     }
@@ -217,7 +224,16 @@ final class TerminalGridViewController: NSViewController {
             }
             chip.onNewShell = { [weak self] in self?.onNewShell?(terminal) }
             chip.translatesAutoresizingMaskIntoConstraints = false
+            // Each chip keeps its own width; the spacer below takes the slack.
+            chip.setContentHuggingPriority(.required, for: .horizontal)
             tabBar.addArrangedSubview(chip)
+        }
+        if !terminals.isEmpty {
+            let spacer = TabBarSpacer()
+            spacer.translatesAutoresizingMaskIntoConstraints = false
+            spacer.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+            spacer.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+            tabBar.addArrangedSubview(spacer)
         }
         updateEmptyState()
     }
@@ -228,6 +244,10 @@ final class TerminalGridViewController: NSViewController {
         container.isHidden = terminals.isEmpty
     }
 }
+
+/// The stretchable gap after the last tab. A named type so the double-click
+/// gesture and the layout checks can tell it from a tab.
+final class TabBarSpacer: NSView {}
 
 /// One tab in the terminal tab bar: status dot, terminal glyph, project name
 /// and a close button. Clicking selects; the × button dismisses.

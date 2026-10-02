@@ -16,8 +16,15 @@ final class AppHTTPFixture: URLProtocol {
 
     override func startLoading() {
         precondition(request.url?.host == "agentbox-app-fixture.invalid", "Unexpected network request")
-        precondition(request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-app-token")
         let path = request.url!.path
+        // Terminal sockets carry the token in the query, not in a header, and
+        // no fixture can complete a WebSocket upgrade: the tab-strip check only
+        // needs the tabs to render, so a refusal is enough.
+        if path.hasSuffix("/term") {
+            respond(["error": "no terminal in the fixture"], status: 503)
+            return
+        }
+        precondition(request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-app-token")
         if path == "/api/sessions" {
             respond([
                 ["id": Self.alphaID, "name": "Alpha", "agent": "claude", "account_id": "synthetic", "account_label": "Fixture"],
@@ -609,6 +616,7 @@ struct AppSmokeChecks {
         )
         precondition(shellTab.tabTitle == "demo · 终端 2")
         precondition(shellTab.paneKey != "w/demo", "a shell tab must not take the agent tab's key")
+        tabStripChecks(client: client, workspace: shellWorkspace)
 
         // Right-click offers a new shell and the AI session; double-click opens.
         let menuSidebar = SidebarViewController()
@@ -893,6 +901,29 @@ struct AppSmokeChecks {
         try? await Task.sleep(nanoseconds: 60_000_000)
     }
 
+    /// Tabs pack to the left. The bar spans the window, and NSStackView's
+    /// default gravity-area layout was free to leave a gap and park the newest
+    /// tab at the far right; a second tab must start right after the first.
+    @MainActor
+    static func tabStripChecks(client: AgentboxClient, workspace: Workspace) {
+        let grid = TerminalGridViewController()
+        let window = NSWindow(contentViewController: grid)
+        window.setContentSize(NSSize(width: 1200, height: 600))
+        let project = RemoteProject(id: "p-tabs", name: "demo", path: "/w/demo")
+        _ = grid.add(client: client, workspace: workspace, project: project)
+        _ = grid.add(client: client, workspace: workspace, project: project, kind: .shell(id: "tab2", index: 1))
+        grid.view.layoutSubtreeIfNeeded()
+        let chips = views(in: grid.view).compactMap { $0 as? TerminalTabChip }
+        precondition(chips.count == 2, "expected two tabs, got \(chips.count)")
+        let frames = chips
+            .map { $0.convert($0.bounds, to: grid.view) }
+            .sorted { $0.minX < $1.minX }
+        precondition(frames[0].minX < 40, "the first tab must start at the left edge of the bar")
+        let gap = frames[1].minX - frames[0].maxX
+        precondition(gap < 12, "a new tab must sit beside the previous one, not at the far right (gap \(gap))")
+        window.close()
+    }
+
     @MainActor
     static func check() async throws {
         themeChecks()
@@ -1000,7 +1031,7 @@ struct AppSmokeChecks {
             controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
-        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle, the sidebar's server clock and removed sync panel")
+        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs and removed sync panel")
         if ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_KEEP_OPEN"] == "1" {
             try await Task.sleep(nanoseconds: 120_000_000_000)
         }
