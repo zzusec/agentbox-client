@@ -55,6 +55,7 @@ port=${PROD_LISTEN##*:}
 sshq "curl -sS -o /dev/null -w 'local HTTP %{http_code}\n' --max-time 10 http://127.0.0.1:${port:-8180}/"
 sshq 'journalctl -u agentbox --since "5 minutes ago" --no-pager -n 30'
 if [ -n "${PROD_URL:-}" ]; then
-	curl -sS -o /dev/null -w "public HTTP %{http_code}\n" --connect-timeout 10 --max-time 20 "$PROD_URL"
+	# 跟随重定向：未登录访问根路径会 307 到 /management.html，只看首个状态码会误判成失败。
+	curl -sS -o /dev/null -L -w "public HTTP %{http_code} %{url_effective}\n" --connect-timeout 10 --max-time 25 "$PROD_URL"
 fi
-echo "== 完成：systemd active + 内外网 200 + 日志无启动失败才算通过"
+echo "== 完成：systemd active + 内外网最终 200 + 日志无启动失败才算通过"
