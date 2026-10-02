@@ -59,7 +59,7 @@
   :root[data-sidebar-collapsed="true"] .side-foot > .conn-latency { margin-inline: 0; }
 }
 .side-foot { padding: 4px 14px 10px; }
-.side-tools { flex-direction: column; align-items: stretch; }
+.side-tools { display: flex; flex-direction: column; align-items: stretch; }
 .side-tools .side-tool { width: 100%; height: 36px; justify-content: flex-start; padding-inline: 12px; }
 .side-tools .side-item-label { display: inline; }
 .side-tools .conn-latency { min-height: 28px; flex: none; padding-inline: 12px; }
@@ -223,4 +223,20 @@ dialog:not(.dlg-file):not(.dlg-img) { border-radius: 18px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .project-tile { transition: none; }
+}
+
+/* Expanded sidebar on wide screens: the collapse control shares the 工作区
+   heading row instead of taking a row of its own, so the navigation starts
+   level with the top of the main panel. The rail and the phone drawer keep
+   their own head. */
+@media (min-width: 761px) {
+  .sidebar { position: relative; }
+  :root:not([data-sidebar-collapsed="true"]) .side-head {
+    position: absolute; top: 8px; right: 14px; z-index: 1;
+    height: auto; padding: 0;
+  }
+  :root:not([data-sidebar-collapsed="true"]) .console-nav { padding-top: 8px; }
+  :root:not([data-sidebar-collapsed="true"]) .console-nav > .side-label {
+    display: flex; align-items: center; min-height: 32px; padding-bottom: 0;
+  }
 }
