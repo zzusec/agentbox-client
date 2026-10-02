@@ -1245,7 +1245,9 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         return item
     }
 
-    @objc private func openTerminalSettings() {
+    /// Reached from the toolbar button and from 设置… (⌘,) in the app menu,
+    /// which has no target and finds this through the responder chain.
+    @objc func openTerminalSettings() {
         presentAsSheet(TerminalSettingsViewController())
     }
 

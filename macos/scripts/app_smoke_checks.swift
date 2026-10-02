@@ -618,6 +618,7 @@ struct AppSmokeChecks {
         precondition(shellTab.paneKey != "w/demo", "a shell tab must not take the agent tab's key")
         tabStripChecks(client: client, workspace: shellWorkspace)
         inputMethodChecks()
+        appMenuChecks()
         // Uploads report progress as text in the banner; a progress bar over
         // the terminal was one more thing covering the output.
         let uploadTab = TerminalViewController(
@@ -911,6 +912,22 @@ struct AppSmokeChecks {
         try? await Task.sleep(nanoseconds: 60_000_000)
     }
 
+    /// The app menu: the version reads straight off it, and 设置… reaches the
+    /// window's controller through the responder chain (no target of its own).
+    @MainActor
+    static func appMenuChecks() {
+        let appMenu = AppDelegate.makeMainMenu().items.first!.submenu!
+        precondition(appMenu.items.first!.title.hasPrefix("版本 "),
+                     "the version belongs in the menu, not only behind 关于")
+        precondition(appMenu.items.first!.action == nil, "the version line is a label, not a command")
+        guard let settings = appMenu.items.first(where: { $0.title == "设置…" }), let action = settings.action else {
+            preconditionFailure("the app menu must offer 设置…")
+        }
+        precondition(settings.keyEquivalent == ",", "设置… keeps the usual ⌘, shortcut")
+        precondition(settings.target == nil, "设置… must travel the responder chain")
+        precondition(MainViewController.instancesRespond(to: action), "nothing implements the 设置… action")
+    }
+
     /// Input-method composition: the pinyin being typed is drawn locally at
     /// the caret, and it has to stay above SwiftTerm's caret view — that caret
     /// is a filled block over the very cell the composition starts at, and
@@ -1067,7 +1084,7 @@ struct AppSmokeChecks {
             controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
-        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, the input-method preview, a bar-free upload banner and removed sync panel")
+        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, the input-method preview, a bar-free upload banner, the app menu's version and 设置… entry, and removed sync panel")
         if ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_KEEP_OPEN"] == "1" {
             try await Task.sleep(nanoseconds: 120_000_000_000)
         }

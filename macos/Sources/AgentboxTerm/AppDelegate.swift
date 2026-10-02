@@ -31,17 +31,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func buildMainMenu() {
+        NSApp.mainMenu = Self.makeMainMenu()
+    }
+
+    /// The version as the menu shows it. Reading it off the menu is quicker
+    /// than opening 关于, which is the only reason that panel was ever opened.
+    static var versionLabel: String {
+        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        return "版本 " + (short ?? "开发版")
+    }
+
+    /// Built apart from the app launch so the smoke checks can inspect it.
+    static func makeMainMenu() -> NSMenu {
         let mainMenu = NSMenu()
         let appItem = NSMenuItem()
         mainMenu.addItem(appItem)
         let appMenu = NSMenu()
         appItem.submenu = appMenu
 
+        // A label, not a command: no action means the menu keeps it greyed out.
+        appMenu.addItem(NSMenuItem(title: versionLabel, action: nil, keyEquivalent: ""))
         appMenu.addItem(
             withTitle: "关于 agentbox-client",
             action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
             keyEquivalent: ""
         )
+        appMenu.addItem(.separator())
+
+        // No target: ⌘, travels the responder chain to the window's controller,
+        // which is where the terminal settings sheet lives.
+        appMenu.addItem(NSMenuItem(
+            title: "设置…",
+            action: #selector(MainViewController.openTerminalSettings),
+            keyEquivalent: ","
+        ))
         appMenu.addItem(.separator())
 
         let checkItem = NSMenuItem(
@@ -97,7 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         fullScreen.keyEquivalentModifierMask = [.command, .control]
         NSApp.windowsMenu = windowMenu
 
-        NSApp.mainMenu = mainMenu
+        return mainMenu
     }
 
     private func savedConnection() -> SavedConnection? {
