@@ -7,6 +7,9 @@ final class AppHTTPFixture: URLProtocol {
     static var pending: [AppHTTPFixture] = []
     static let alphaID = "app-smoke-alpha-\(UUID().uuidString)"
     static let betaID = "app-smoke-beta-\(UUID().uuidString)"
+    /// What the fixture's server claims its clock and timezone are.
+    static let serverZone = "Asia/Shanghai"
+    static let serverSkew: TimeInterval = 3 * 3600
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -26,6 +29,19 @@ final class AppHTTPFixture: URLProtocol {
             Self.lock.unlock()
         } else if path == "/api/sessions/\(Self.betaID)/projects" {
             respond([["id": "beta-project", "name": "Beta project", "path": "/workspace/Beta project"]])
+        } else if path == "/api/me" {
+            // The sidebar clock reads the server's time, so the fixture answers
+            // with an instant deliberately hours away from the runner's: a label
+            // showing this Mac's clock instead would no longer match.
+            let formatter = ISO8601DateFormatter()
+            formatter.timeZone = TimeZone(identifier: Self.serverZone)!
+            formatter.formatOptions = [.withInternetDateTime]
+            respond([
+                "user": "synthetic-app-user",
+                "role": "user",
+                "timezone": Self.serverZone,
+                "now": formatter.string(from: Date().addingTimeInterval(Self.serverSkew)),
+            ])
         } else {
             preconditionFailure("Unexpected API path: \(path)")
         }
@@ -937,6 +953,29 @@ struct AppSmokeChecks {
         precondition(table.numberOfRows == 1, "Stale failure cleared current workspace projects")
         precondition(!views(in: sidebar.view).compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("Synthetic stale failure") })
 
+        // The sidebar's server clock: it must show the server's time (the
+        // fixture's, three hours from the runner's), and a passing status
+        // message must not wipe it — it had no line of its own before, so the
+        // next project reload always overwrote it.
+        try await waitFor("Sidebar server clock missing") {
+            views(in: sidebar.view).compactMap { $0 as? NSTextField }.contains { $0.stringValue.hasPrefix("服务器时间 ") }
+        }
+        let clockLabel = views(in: sidebar.view).compactMap { $0 as? NSTextField }
+            .first { $0.stringValue.hasPrefix("服务器时间 ") }!
+        let serverFormatter = DateFormatter()
+        serverFormatter.locale = Locale(identifier: "en_US_POSIX")
+        serverFormatter.timeZone = TimeZone(identifier: AppHTTPFixture.serverZone)!
+        serverFormatter.dateFormat = "HH:mm"
+        // A minute can roll over between the client's sync and this check, so
+        // the neighbouring minutes count as a match too.
+        let expectedClock = [-60.0, 0, 60].map {
+            serverFormatter.string(from: Date().addingTimeInterval(AppHTTPFixture.serverSkew + $0))
+        }
+        precondition(expectedClock.contains { clockLabel.stringValue.contains($0) },
+                     "sidebar clock \(clockLabel.stringValue) is not the server's \(expectedClock[1])")
+        sidebar.setStatus("正在读取项目…")
+        precondition(clockLabel.stringValue.hasPrefix("服务器时间 "), "a status message wiped the server clock")
+
         let components = URLComponents(url: client.terminalURL(workspace: beta, project: "中文 + API")!, resolvingAgainstBaseURL: false)!
         precondition(components.scheme == "wss")
         precondition(components.queryItems!.contains(URLQueryItem(name: "project", value: "中文 + API")))
@@ -961,7 +1000,7 @@ struct AppSmokeChecks {
             controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
-        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle and removed sync panel")
+        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle, the sidebar's server clock and removed sync panel")
         if ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_KEEP_OPEN"] == "1" {
             try await Task.sleep(nanoseconds: 120_000_000_000)
         }
