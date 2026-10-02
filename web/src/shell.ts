@@ -347,7 +347,7 @@ export function renderSidebar() {
     h.className = "sc-name";
     h.textContent = sess.name;
     const meta = document.createElement("span");
-    meta.className = "meta";
+    meta.className = "meta sc-state" + (sess.status === "running" ? " run" : sess.stop_reason === "idle" ? " idle" : "");
     meta.textContent = status;
     body.append(h, meta);
     const caret = svgIcon("caret", 14);

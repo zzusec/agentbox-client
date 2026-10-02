@@ -8,9 +8,14 @@
 .console-top-tools { display: flex; align-items: center; gap: 16px; }
 .console-top-tools [data-theme-ico] { display: flex; }
 .console-top-tools [data-theme-ico] svg { display: none; }
-:root[data-theme-mode="system"] .console-top-tools svg.ic-system,
-:root[data-theme-mode="light"] .console-top-tools svg.ic-sun,
-:root[data-theme-mode="dark"] .console-top-tools svg.ic-moon { display: block; }
+/* 当前模式图标只给窄屏的单键循环；分段控件每个按钮固定显示自己的图标
+ * （shell.css），否则「浅色/深色」按钮里会多出一个当前模式图标。 */
+:root[data-theme-mode="system"] .console-top-tools .topbar-theme-cycle svg.ic-system,
+:root[data-theme-mode="light"] .console-top-tools .topbar-theme-cycle svg.ic-sun,
+:root[data-theme-mode="dark"] .console-top-tools .topbar-theme-cycle svg.ic-moon,
+.console-top-tools .theme-options [data-theme-option="system"] svg.ic-system,
+.console-top-tools .theme-options [data-theme-option="light"] svg.ic-sun,
+.console-top-tools .theme-options [data-theme-option="dark"] svg.ic-moon { display: block; }
 .console-user { max-width: 160px; overflow: hidden; text-overflow: ellipsis; font-size: 13px; font-weight: 600; }
 .topbar .menu-btn { background: transparent; border-color: transparent; }
 .sidebar { width: 248px; border-right: 0; background: var(--panel); }
@@ -240,4 +245,83 @@ dialog:not(.dlg-file):not(.dlg-img) { border-radius: 18px; }
   :root:not([data-sidebar-collapsed="true"]) .console-nav > .side-label {
     display: flex; align-items: center; min-height: 32px; padding-bottom: 0;
   }
+}
+
+/* ---- 导航：参照 GrokIQ 的单列侧栏 ----
+ * 收起开关在顶栏最左侧，品牌两行（名称 + 副标题）；侧栏是一整列自上而下排的
+ * 分组，组名统一为灰色小字、条目统一字号与行高，工具组紧跟在实例列表后面而不是
+ * 钉在底部（之前中间留出一大块空白）。整列一起滚动，连接延迟沉在列尾。 */
+.topbar { gap: 8px; }
+.topbar .side-collapse { width: 36px; height: 36px; margin: 0; color: var(--muted); border-radius: 10px; }
+.topbar .side-collapse:hover { color: var(--text); background: var(--panel-2); }
+.topbar-brand { gap: 10px; padding: 4px 8px 4px 4px; border-radius: 10px; }
+.topbar-brand .side-mark { width: 30px; height: 30px; }
+.brand-text { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; text-align: left; }
+.brand-text .side-brand-name { font: 700 15px/1.1 var(--sans); letter-spacing: .06em; }
+.brand-sub { font: 400 11.5px/1.2 var(--sans); color: var(--muted); letter-spacing: 0; white-space: nowrap; }
+.topbar-crumbs:not(:empty), .tb-title { margin-left: 6px; }
+
+@media (min-width: 761px) {
+  .sidebar { width: 236px; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; }
+  .side-head { display: none; }
+  .console-nav, .side-sessions, .side-foot { padding: 0 12px; }
+  .console-nav { padding-top: 10px; gap: 2px; }
+  .side-sessions { flex: none; min-height: auto; }
+  .session-list { flex: none; overflow: visible; padding: 0; }
+  .side-foot { flex: 1 0 auto; display: flex; flex-direction: column; padding-bottom: 10px; }
+  .side-foot .side-nav { padding: 0; border: 0; gap: 2px; }
+  .side-foot > .conn-latency { flex: none; margin: auto 0 0; }
+
+  /* 组名：四组同一个样式（此前「工作区」是灰色小字、「工具/系统管理」是加粗黑字）。 */
+  .sidebar .side-label,
+  .sidebar .side-group-label,
+  .console-nav > .side-label {
+    display: flex; align-items: center; min-height: 0;
+    padding: 18px 12px 6px; margin: 0;
+    color: var(--muted); font: 500 12px/1.2 var(--sans); letter-spacing: 0;
+  }
+  .console-nav > .side-label { padding-top: 6px; }
+  .side-section-head { height: auto; padding: 0; }
+  .side-section-head .side-count { padding: 18px 12px 6px; }
+
+  /* 条目：同一字号、行高与图标尺寸。 */
+  .sidebar .side-item,
+  .sidebar .side-tools .side-tool,
+  .sidebar-instance > summary {
+    height: 40px; padding: 0 12px; gap: 12px;
+    border-radius: 10px; color: var(--text);
+    font: 400 14.5px/1 var(--sans);
+  }
+  .sidebar .side-item svg, .sidebar .side-item .glyph { width: 18px; height: 18px; }
+  .sidebar .side-item:hover, .sidebar-instance > summary:hover { background: var(--side-hover); }
+  .sidebar .side-item.active {
+    color: var(--amber); font-weight: 500; box-shadow: none;
+    background: color-mix(in srgb, var(--amber) 11%, var(--panel));
+  }
+  .sidebar-instance > summary { height: auto; min-height: 48px; padding-block: 6px; line-height: 1.35; }
+  .sidebar-instance .sc-name { font-size: 14.5px; margin-bottom: 2px; }
+  .sidebar-instance .meta { font-size: 12px; }
+  .sidebar-projects { margin: 0 0 4px 21px; }
+  .sidebar-project { height: 36px; min-height: 36px; font-size: 14px; }
+}
+
+/* 收起为图标栏：沿用原有的居中规则，只把上面放宽的内边距收回来。 */
+@media (min-width: 761px) {
+  :root[data-sidebar-collapsed="true"] .console-nav,
+  :root[data-sidebar-collapsed="true"] .side-sessions,
+  :root[data-sidebar-collapsed="true"] .side-foot { padding-inline: 8px; }
+  :root[data-sidebar-collapsed="true"] .sidebar .side-label,
+  :root[data-sidebar-collapsed="true"] .sidebar .side-group-label,
+  :root[data-sidebar-collapsed="true"] .side-section-head { display: none; }
+  :root[data-sidebar-collapsed="true"] .console-nav { padding-top: 10px; }
+  :root[data-sidebar-collapsed="true"] .side-foot .side-nav { padding-top: 8px; border-top: 1px solid var(--line); margin-top: 8px; }
+  :root[data-sidebar-collapsed="true"] .sidebar .side-item,
+  :root[data-sidebar-collapsed="true"] .sidebar .side-tools .side-tool { padding: 0; justify-content: center; width: 40px; margin-inline: auto; }
+  :root[data-sidebar-collapsed="true"] .sidebar-instance > summary { padding: 0; justify-content: center; }
+  :root[data-sidebar-collapsed="true"] :is(.sidebar-project-message, .sidebar-project-retry) { display: none; }
+  :root[data-sidebar-collapsed="true"] .side-foot > .conn-latency { justify-content: center; padding: 0; }
+}
+@media (max-width: 760px) {
+  .topbar .side-collapse { display: none; }
+  .brand-sub { display: none; }
 }
