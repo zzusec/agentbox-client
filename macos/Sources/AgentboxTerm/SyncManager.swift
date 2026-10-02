@@ -99,11 +99,17 @@ final class SyncManager {
     /// last line, so without it "why did this file come back?" has no answer
     /// once the pass is over.
     private func emit(_ text: String) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        appendToLog(trimmed)
-        DispatchQueue.main.async { [weak self] in
-            self?.onStatus?(trimmed)
+        // A read can hand over several lines at once. They have to be split
+        // here: a status line that still carries a newline is drawn as two
+        // lines inside a one-line bar, which is how two verdicts ended up on
+        // top of each other, and the log wants one entry per line anyway.
+        for line in text.split(whereSeparator: \.isNewline) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { continue }
+            appendToLog(trimmed)
+            DispatchQueue.main.async { [weak self] in
+                self?.onStatus?(trimmed)
+            }
         }
     }
 

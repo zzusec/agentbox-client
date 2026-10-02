@@ -1156,9 +1156,21 @@ struct AppSmokeChecks {
         controller.handleSyncEvent(progressEvent("other", 7))
         precondition(controller.syncStatusText.hasPrefix("focused ·"),
                      "the bar must stay on the project in front: \(controller.syncStatusText)")
-        // With nothing in front, the newest project line still shows: the bar
-        // must not go blank while a sync is running.
+        // An engine log line naming another project goes to that project's
+        // lane, not over the focused one — and a chunk that still carries a
+        // newline is reduced to its last line, since the bar is one line high
+        // and a second one is drawn on top of the first.
+        controller.handleSyncOutput("Beta project: 3/10\nBeta project: 4/10")
+        precondition(controller.syncStatusText.hasPrefix("focused ·"),
+                     "another project's log line must not take the bar: \(controller.syncStatusText)")
+        precondition(!controller.syncStatusText.contains("\n"), "the bar shows a single line")
+
+        // With nothing in front, the newest line shows — and it is the one that
+        // log line produced, which is what proves it was filed under its own
+        // project instead of the workspace-wide line.
         grid.remove(focusedTab)
+        precondition(controller.syncStatusText == "Beta project: 4/10",
+                     "a project's log line must be kept per project: \(controller.syncStatusText)")
         controller.handleSyncEvent(progressEvent("other", 8))
         precondition(controller.syncStatusText.hasPrefix("other ·"),
                      "with no tab in front the newest line shows: \(controller.syncStatusText)")

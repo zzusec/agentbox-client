@@ -47,6 +47,9 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     private var projectStatus: [String: StatusLine] = [:]
     /// The project of the tab in front.
     private var focusedProject: String?
+    /// The current workspace's project names, for recognising which project an
+    /// engine log line is about.
+    private var knownProjects: [String] = []
     /// The newest project line of all, for when no tab is in front yet (at
     /// launch, or while the projects are still loading): the bar should still
     /// show that something is syncing.
@@ -159,6 +162,9 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         syncStatusLabel.font = .systemFont(ofSize: 11)
         syncStatusLabel.textColor = NativeTheme.secondaryText
         syncStatusLabel.lineBreakMode = .byTruncatingMiddle
+        // One line, always: the bar is one line high, and a second one is drawn
+        // on top of the first rather than below it.
+        syncStatusLabel.maximumNumberOfLines = 1
         syncStatusLabel.translatesAutoresizingMaskIntoConstraints = false
         syncStatusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         syncStatusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -270,8 +276,28 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     /// Routes a line of engine output to the bottom bar. A "done/total" pair is
     /// progress and drives the bar; anything else is the verdict and ends it.
     func handleSyncOutput(_ message: String) {
-        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Defensive: whatever is shown must be a single line.
+        let text = message
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .last { !$0.isEmpty } ?? ""
         guard !text.isEmpty else { return }
+
+        // The engine prefixes its lines with the project, so a line about one
+        // project belongs in that project's lane — the bar shows the project of
+        // the tab in front, and a line about another one must not cover it.
+        if let project = knownProjects.first(where: {
+            text.hasPrefix("\($0)：") || text.hasPrefix("\($0): ")
+        }) {
+            let counts = parseSyncCounts(text)
+            let busy = counts.map { $0.total > 0 } ?? false
+            setProjectStatus(project, StatusLine(
+                text: text,
+                busy: busy,
+                progress: counts.flatMap { $0.total > 0 ? Double($0.done) / Double($0.total) : nil }
+            ))
+            return
+        }
 
         // Progress lines look like "项目: 45/820 (5%)". These come from the
         // engine's own log, so they update the engine line but leave the
@@ -377,6 +403,14 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         case let .failed(message):
             showUploadStatus(StatusLine(text: "上传失败：\(file)：\(message)", busy: false), holding: true)
         }
+    }
+
+    /// Keeps the sidebar and the names used to attribute engine log lines in
+    /// step: a line reading "demo: 12/40" is only about a project if "demo" is
+    /// one.
+    private func showProjects(_ projects: [RemoteProject]) {
+        knownProjects = projects.map(\.name)
+        sidebar.setProjects(projects)
     }
 
     private func setProjectStatus(_ project: String, _ line: StatusLine) {
@@ -691,7 +725,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         } else {
             showSyncStatus("未配置本地同步目录：点侧栏「选择目录」后开始同步")
         }
-        sidebar.setProjects([])
+        showProjects([])
         focus(project: nil)
         projectStatus.removeAll()
         lastProjectLine = nil
@@ -700,10 +734,10 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             do {
                 let projects = try await client.projects(in: workspace)
                 guard selectionGeneration == generation else { return }
-                sidebar.setProjects(projects)
+                showProjects(projects)
             } catch {
                 guard selectionGeneration == generation else { return }
-                sidebar.setProjects([])
+                showProjects([])
                 sidebar.setStatus("读取项目失败：\(error.localizedDescription)")
             }
         }
@@ -809,7 +843,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
                             setting.policy = draft.policy
                         }
                     }
-                    self.sidebar.setProjects(try await self.client.projects(in: workspace))
+                    self.showProjects(try await self.client.projects(in: workspace))
                     // A new project has no baseline, so the chosen policy is
                     // what decides the very first sync. Sync needs a workspace
                     // directory for its baseline even when this project lives
@@ -906,7 +940,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
                 // folders, and refreshes the list itself.
                 renameProject(project, to: draft.name)
             } else {
-                sidebar.setProjects((try? await client.projects(in: workspace)) ?? [])
+                showProjects((try? await client.projects(in: workspace)) ?? [])
                 showSyncStatus("已保存「\(project.name)」的设置")
             }
         }
@@ -1001,7 +1035,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
                 startSyncIfConfigured(workspace, localRoot: localRootURL)
             }
             do {
-                sidebar.setProjects(try await client.projects(in: workspace))
+                showProjects(try await client.projects(in: workspace))
             } catch {
                 sidebar.setStatus("读取项目失败：\(error.localizedDescription)")
             }
@@ -1069,7 +1103,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             }
             startSyncIfConfigured(workspace, localRoot: localRootURL)
             do {
-                sidebar.setProjects(try await client.projects(in: workspace))
+                showProjects(try await client.projects(in: workspace))
             } catch {
                 sidebar.setStatus("读取项目失败：\(error.localizedDescription)")
             }
