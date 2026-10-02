@@ -88,6 +88,106 @@ final class TerminalSurface: TerminalView {
         self.menu = menu
     }
 
+    // MARK: - Input method composition (CJK)
+
+    /// What the input method is composing right now (pinyin, kana…). SwiftTerm
+    /// ignores it and reports "nothing marked", so nothing appeared while
+    /// typing Chinese until a word was committed. It is drawn here, locally,
+    /// at the caret — never sent to the remote end. An earlier attempt sent the
+    /// composition to the shell and erased it with backspaces, which leaked
+    /// half-typed input into programs and was removed (f67c82d).
+    private var markedText = NSAttributedString()
+    private lazy var markedLabel: NSTextField = {
+        let label = NSTextField(labelWithString: "")
+        label.drawsBackground = true
+        label.isBordered = false
+        label.isHidden = true
+        label.lineBreakMode = .byClipping
+        label.cell?.usesSingleLineMode = true
+        addSubview(label)
+        return label
+    }()
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        if let attributed = string as? NSAttributedString {
+            markedText = attributed
+        } else if let plain = string as? String {
+            markedText = NSAttributedString(string: plain)
+        } else {
+            markedText = NSAttributedString()
+        }
+        showMarkedText()
+    }
+
+    override func unmarkText() {
+        markedText = NSAttributedString()
+        showMarkedText()
+    }
+
+    override func hasMarkedText() -> Bool {
+        markedText.length > 0
+    }
+
+    override func markedRange() -> NSRange {
+        markedText.length > 0
+            ? NSRange(location: 0, length: markedText.length)
+            : NSRange(location: NSNotFound, length: 0)
+    }
+
+    override func validAttributesForMarkedText() -> [NSAttributedString.Key] {
+        [.underlineStyle, .backgroundColor]
+    }
+
+    /// The input method commits: drop the preview first, then send the text.
+    /// Some input methods commit an attributed string, which SwiftTerm's
+    /// insertText (NSString only) would silently drop.
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        markedText = NSAttributedString()
+        showMarkedText()
+        if let attributed = string as? NSAttributedString {
+            super.insertText(attributed.string as NSString, replacementRange: replacementRange)
+        } else {
+            super.insertText(string, replacementRange: replacementRange)
+        }
+    }
+
+    /// Lays the composition over the cells at the caret, in the terminal's
+    /// own font and colours, underlined the way macOS marks composing text.
+    private func showMarkedText() {
+        guard markedText.length > 0 else {
+            markedLabel.isHidden = true
+            markedLabel.stringValue = ""
+            return
+        }
+        let text = NSMutableAttributedString(string: markedText.string, attributes: [
+            .font: font,
+            .foregroundColor: nativeForegroundColor,
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+            .underlineColor: nativeForegroundColor,
+        ])
+        markedLabel.attributedStringValue = text
+        markedLabel.backgroundColor = nativeBackgroundColor
+        let caret = caretFrame
+        let width = ceil(text.size().width) + 2
+        let maxWidth = max(caret.width, bounds.width - caret.minX)
+        markedLabel.frame = NSRect(
+            x: caret.minX,
+            y: caret.minY,
+            width: min(width, maxWidth),
+            height: max(caret.height, ceil(text.size().height))
+        )
+        markedLabel.isHidden = false
+    }
+
+    /// Keeps the candidate window just below the composition rather than at a
+    /// stale caret position.
+    override func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+        actualRange?.pointee = range
+        let anchor = markedText.length > 0 && !markedLabel.isHidden ? markedLabel.frame : caretFrame
+        guard let window else { return .zero }
+        return window.convertToScreen(convert(anchor, to: nil))
+    }
+
     /// ⌘V with files or an image on the clipboard uploads them, the same as
     /// dropping them: files copied in Finder arrive as file URLs, a screenshot
     /// copied with ⌃⇧⌘4 arrives as image data with no text. Anything with text

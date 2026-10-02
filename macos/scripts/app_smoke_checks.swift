@@ -604,6 +604,40 @@ struct AppSmokeChecks {
         let projectTable = views(in: menuSidebar.view).compactMap { $0 as? NSTableView }.first!
         precondition(projectTable.doubleAction != nil, "double-clicking a project must open it")
 
+        // Input method composition shows locally and is never sent until committed.
+        final class SentRecorder: NSObject, TerminalViewDelegate {
+            var sent: [UInt8] = []
+            func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {}
+            func setTerminalTitle(source: TerminalView, title: String) {}
+            func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+            func send(source: TerminalView, data: ArraySlice<UInt8>) { sent.append(contentsOf: data) }
+            func scrolled(source: TerminalView, position: Double) {}
+            func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {}
+            func bell(source: TerminalView) {}
+            func clipboardCopy(source: TerminalView, content: Data) {}
+            func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
+            func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+        }
+        let imeSurface = TerminalSurface(frame: NSRect(x: 0, y: 0, width: 600, height: 300), font: nil)
+        let recorder = SentRecorder()
+        imeSurface.terminalDelegate = recorder
+        imeSurface.setMarkedText("ni hao", selectedRange: NSRange(location: 6, length: 0),
+                                 replacementRange: NSRange(location: NSNotFound, length: 0))
+        precondition(imeSurface.hasMarkedText() && imeSurface.markedRange().length == 6)
+        precondition(
+            imeSurface.subviews.compactMap { $0 as? NSTextField }.contains { !$0.isHidden && $0.stringValue == "ni hao" },
+            "the composition must be visible at the caret"
+        )
+        precondition(recorder.sent.isEmpty, "composing text must not reach the remote end")
+        imeSurface.insertText(NSAttributedString(string: "你好"), replacementRange: NSRange(location: NSNotFound, length: 0))
+        precondition(!imeSurface.hasMarkedText())
+        precondition(String(decoding: recorder.sent, as: UTF8.self) == "你好", "an attributed commit must still be sent")
+        precondition(!imeSurface.subviews.compactMap { $0 as? NSTextField }.contains { !$0.isHidden && !$0.stringValue.isEmpty })
+        imeSurface.setMarkedText("zai", selectedRange: NSRange(location: 3, length: 0),
+                                 replacementRange: NSRange(location: NSNotFound, length: 0))
+        imeSurface.unmarkText()
+        precondition(!imeSurface.hasMarkedText() && recorder.sent.count == "你好".utf8.count)
+
         // ⌘V with an image and no text becomes a PNG file to upload.
         let board = NSPasteboard(name: NSPasteboard.Name("agentbox.smoke.paste"))
         board.clearContents()
