@@ -1151,6 +1151,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
 
         sidebarWidth = max(250, sidebar.view.frame.width)
         sidebarCollapsed = true
+        sidebar.view.isHidden = true
         splitView.removeArrangedSubview(sidebar.view)
         sidebar.view.removeFromSuperview()
         splitView.adjustSubviews()

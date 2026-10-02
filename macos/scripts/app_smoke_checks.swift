@@ -908,8 +908,10 @@ struct AppSmokeChecks {
         let toolbarItem = window.toolbar!.items.first!
         precondition(NSApp.sendAction(toolbarItem.action!, to: toolbarItem.target, from: toolbarItem))
         precondition(sidebar.view.isHidden)
+        precondition(sidebar.view.superview == nil, "a hidden sidebar must leave the split view, not keep a strip")
         precondition(NSApp.sendAction(toolbarItem.action!, to: toolbarItem.target, from: toolbarItem))
         precondition(!sidebar.view.isHidden)
+        precondition(controller.isSidebarVisible)
         precondition(!views(in: sidebar.view).compactMap { $0 as? NSButton }.contains { $0.title == "选择目录" }, "removed workspace sync panel must stay absent")
         if let output = ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_IMAGE"] {
             controller.view.layoutSubtreeIfNeeded()
