@@ -8,6 +8,8 @@
 
 新安装推荐使用包内 `deploy/release.py`，无需 Go 或 Node；配置、版本、数据与缓存分离。完整命令及旧安装迁移见[目录与迁移手册](../docs/architecture/deployment-layout.md)。下文 `install.sh` / `deploy.sh` 专指保留兼容的仓库内部署模式。
 
+已经固定好一台生产机、反复发布同一套布局时，`deploy/prod-release.sh <版本> [解包目录]` 把远端 `release.py install`、`activate` 和发布后验证（`current` 指向、`systemctl is-active`、本机与公网 HTTP、最近日志）串成一条命令；连接参数读 `deploy/production.env`（已 gitignore，模板见 `production.env.example`），省略解包目录时按版本名在远端 `/root/pkg*` 下找最新的那个。它不构建也不传包——先在本地 `python3 scripts/build-release.py --version <版本> --output DIR`，再把 `agentbox_<版本>_$PROD_ARCH.tar.gz` scp 过去 `tar xzf` 解包。`activate` 会重启服务，连接会断一下。
+
 ## 一键安装
 
 仓库根目录的 `install.sh` 是面向新用户的在线安装入口，和 `deploy/install.sh`（源码安装 systemd 单元）用途不同。从 v0.1.0 起提供正式发布包及 `SHA256SUMS`，默认命令安装最新正式版本。
