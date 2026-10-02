@@ -280,8 +280,10 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
                 activeTransfers[progress.project] = progress
                 let path = progress.path.map { " \($0)" } ?? ""
                 let percent = Int(progress.percent.rounded())
+                // The project goes first: a workspace syncs several of them and
+                // the line is otherwise about no one in particular.
                 showSyncStatus(
-                    "\(SyncEvent.phaseLabel(progress.phase))\(path) — \(progress.index)/\(progress.total) · \(percent)%",
+                    "\(progress.project) · \(SyncEvent.phaseLabel(progress.phase))\(path) — \(progress.index)/\(progress.total) · \(percent)%",
                     busy: true,
                     progress: progress.percent / 100
                 )
@@ -296,7 +298,11 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             }
             // Keep the bar moving if more of the plan is still to come.
             let inFlight = activeTransfers[transfer.project]
-            showSyncStatus(line, busy: inFlight != nil, progress: inFlight.map { $0.percent / 100 })
+            showSyncStatus(
+                "\(transfer.project) · \(line)",
+                busy: inFlight != nil,
+                progress: inFlight.map { $0.percent / 100 }
+            )
             refreshTransferTooltip()
         case let .status(status):
             projectSyncStatus[status.project] = status
@@ -1163,8 +1169,15 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         // Sync cannot run without a local directory. Asking for one here beats
         // the old behaviour, which wrote a line into the sidebar and returned —
         // the button looked broken.
-        guard let root = requireLocalRoot(for: workspace, policy: policy) else { return }
+        guard let root = requireLocalRoot(for: workspace, policy: policy.isEmpty ? nil : policy) else { return }
         let label = ProjectSyncSetting.policyLabel(policy)
+        // An empty policy is an ordinary pass, run now: three-way merge, both
+        // directions, nothing overwritten wholesale. Nothing to confirm and
+        // nothing to record — the project keeps the sync mode it already has.
+        if policy.isEmpty {
+            runPass(project, in: workspace, root: root, policy: "", status: "正在同步「\(project.name)」…")
+            return
+        }
         // An empty local directory can only mean "download": the engine forces
         // the server side when there is nothing local to win with. The opposite
         // — an unrelated non-empty folder — would overwrite the server project
@@ -1195,6 +1208,17 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         updateProjectSetting(for: workspace, project: project) { setting in
             setting.policy = policy
         }
+        runPass(
+            project, in: workspace, root: root, policy: policy,
+            status: "正在以\(label)全量同步「\(project.name)」…"
+        )
+    }
+
+    /// Runs one pass over a single project and then puts the watcher back.
+    /// An empty policy is a normal pass; "local"/"server" overwrite that way.
+    private func runPass(
+        _ project: RemoteProject, in workspace: Workspace, root: URL, policy: String, status: String
+    ) {
         let manager = SyncManager(
             client: client,
             workspace: workspace,
@@ -1207,7 +1231,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         }
         syncManager?.stop()
         syncManager = manager
-        showSyncStatus("正在以\(label)全量同步「\(project.name)」…", busy: true)
+        showSyncStatus(status, busy: true)
         manager.runForcedPass(project: project.name, policy: policy) { [weak self] result in
             guard let self else { return }
             // Through the same router, so a finished line gets its ✓.

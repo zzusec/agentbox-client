@@ -868,11 +868,19 @@ struct AppSmokeChecks {
         try await drainMainQueue()
         precondition(edited?.id == "p1", "a deferred menu action must still land")
 
-        guard let syncMenu = menu.items.first(where: { $0.title == "立即同步" })?.submenu,
-              syncMenu.items.count == 2 else {
-            preconditionFailure("立即同步 must offer both directions")
+        guard let syncMenu = menu.items.first(where: { $0.title == "立即同步" })?.submenu else {
+            preconditionFailure("立即同步 must offer a submenu")
         }
-        let fromServer = syncMenu.items[0], fromLocal = syncMenu.items[1]
+        let passes = syncMenu.items.filter { !$0.isSeparatorItem }
+        guard passes.count == 3 else {
+            preconditionFailure("立即同步 must offer a plain pass and both overwriting ones")
+        }
+        let both = passes[0], fromServer = passes[1], fromLocal = passes[2]
+        // The plain pass comes first and carries no policy: it overwrites
+        // nothing, which is what "sync now" means with 双向同步 on.
+        precondition(NSApp.sendAction(both.action!, to: both.target, from: both))
+        try await drainMainQueue()
+        precondition(syncedNow?.project.id == "p1" && syncedNow?.policy == "", "a plain pass forces neither side")
         precondition(NSApp.sendAction(fromServer.action!, to: fromServer.target, from: fromServer))
         try await drainMainQueue()
         precondition(syncedNow?.project.id == "p1" && syncedNow?.policy == "server")

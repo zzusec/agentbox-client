@@ -74,6 +74,11 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
         afterMenuCloses { [weak self] in self?.onEditProject?(menuProject) }
     }
 
+    @objc private func syncBothClicked() {
+        guard let menuProject else { return }
+        afterMenuCloses { [weak self] in self?.onSyncProjectNow?(menuProject, "") }
+    }
+
     @objc private func syncFromServerClicked() {
         guard let menuProject else { return }
         afterMenuCloses { [weak self] in self?.onSyncProjectNow?(menuProject, "server") }
@@ -525,6 +530,11 @@ extension SidebarViewController: NSMenuDelegate {
         let syncNow = NSMenuItem(title: "立即同步", action: nil, keyEquivalent: "")
         syncNow.image = NativeTheme.symbol("arrow.triangle.2.circlepath", size: 13, weight: .medium)
         let syncMenu = NSMenu()
+        // The plain pass first: with 双向同步 on, "sync now" normally means
+        // "do the usual pass, now" — the two overwriting passes below are the
+        // repair tools, for when the two sides have genuinely diverged.
+        syncMenu.addItem(item("立即同步一次（双向，不覆盖）", "arrow.triangle.2.circlepath", #selector(syncBothClicked)))
+        syncMenu.addItem(.separator())
         syncMenu.addItem(item("从服务器下载到本地（覆盖本地）", "arrow.down.circle", #selector(syncFromServerClicked)))
         syncMenu.addItem(item("从本地上传到服务器（覆盖服务器）", "arrow.up.circle", #selector(syncFromLocalClicked)))
         syncNow.submenu = syncMenu
