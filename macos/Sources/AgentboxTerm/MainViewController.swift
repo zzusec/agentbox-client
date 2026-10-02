@@ -47,6 +47,10 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     private var projectStatus: [String: StatusLine] = [:]
     /// The project of the tab in front.
     private var focusedProject: String?
+    /// The newest project line of all, for when no tab is in front yet (at
+    /// launch, or while the projects are still loading): the bar should still
+    /// show that something is syncing.
+    private var lastProjectLine: StatusLine?
     private var uploadStatus: StatusLine?
     private var uploadHold: DispatchWorkItem?
     /// How long a finished upload stays up before the engine's line returns.
@@ -220,6 +224,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     /// each and would otherwise keep covering it.
     func showSyncStatus(_ message: String, busy: Bool = false, progress: Double? = nil) {
         projectStatus.removeAll()
+        lastProjectLine = nil
         engineStatus = StatusLine(
             text: message.trimmingCharacters(in: .whitespacesAndNewlines),
             busy: busy,
@@ -233,7 +238,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         // An upload borrows the bar; otherwise it reports the project in front,
         // falling back to the engine's own workspace-wide line.
         let focused = focusedProject.flatMap { projectStatus[$0] }
-        let line = uploadStatus ?? focused ?? engineStatus
+        let line = uploadStatus ?? focused ?? lastProjectLine ?? engineStatus
         let text = line.text
         let busy = line.busy
         let progress = line.progress
@@ -376,6 +381,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
 
     private func setProjectStatus(_ project: String, _ line: StatusLine) {
         projectStatus[project] = line
+        lastProjectLine = line
         renderStatus()
     }
 
@@ -577,7 +583,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             self?.open(project)
         }
         terminalGrid.onSelectTerminal = { [weak self] terminal in
-            self?.focus(project: terminal.project.name)
+            self?.focus(project: terminal?.project.name)
         }
         sidebar.onCopyProjectPath = { project in
             NSPasteboard.general.clearContents()
@@ -675,6 +681,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         sidebar.setProjects([])
         focus(project: nil)
         projectStatus.removeAll()
+        lastProjectLine = nil
         sidebar.setStatus("正在读取项目…")
         Task { @MainActor in
             do {

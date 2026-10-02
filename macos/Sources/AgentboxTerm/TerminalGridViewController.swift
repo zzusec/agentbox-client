@@ -8,8 +8,8 @@ final class TerminalGridViewController: NSViewController {
     /// reopened from the sidebar.
     var onPaneClosed: ((TerminalViewController) -> Void)?
     /// The tab in front changed; the owner follows it (the status bar reports
-    /// that project's sync).
-    var onSelectTerminal: ((TerminalViewController) -> Void)?
+    /// that project's sync). nil once the last tab is gone.
+    var onSelectTerminal: ((TerminalViewController?) -> Void)?
     /// Asks for another shell next to an existing tab: double-clicking the
     /// empty part of the tab bar, or "新开终端" on a tab.
     var onNewShell: ((TerminalViewController) -> Void)?
@@ -185,6 +185,7 @@ final class TerminalGridViewController: NSViewController {
         } else {
             rebuildTabs()
             updateEmptyState()
+            onSelectTerminal?(nil)
         }
         onPaneClosed?(terminal)
     }

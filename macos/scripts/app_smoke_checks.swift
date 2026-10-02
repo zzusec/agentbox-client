@@ -1118,6 +1118,12 @@ struct AppSmokeChecks {
         controller.handleSyncEvent(progressEvent("other", 7))
         precondition(controller.syncStatusText.hasPrefix("focused ·"),
                      "the bar must stay on the project in front: \(controller.syncStatusText)")
+        // With nothing in front, the newest project line still shows: the bar
+        // must not go blank while a sync is running.
+        grid.remove(focusedTab)
+        controller.handleSyncEvent(progressEvent("other", 8))
+        precondition(controller.syncStatusText.hasPrefix("other ·"),
+                     "with no tab in front the newest line shows: \(controller.syncStatusText)")
 
         // The sidebar's server clock: it must show the server's time (the
         // fixture's, three hours from the runner's), and a passing status
