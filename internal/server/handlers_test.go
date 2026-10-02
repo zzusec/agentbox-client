@@ -358,3 +358,37 @@ func TestHandleUploadIntoBrowsedDirectory(t *testing.T) {
 		t.Fatalf("upload followed the symlinked directory: %v", entries)
 	}
 }
+
+// TestHandleMeReportsTheServerClock pins the field the Mac client reads to set
+// its sidebar clock: an RFC3339 instant carrying the configured zone's offset,
+// not UTC and not the host's zone.
+func TestHandleMeReportsTheServerClock(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.cfg = &config.Config{DataDir: s.cfg.DataDir, TimeZone: "Asia/Shanghai"}
+
+	w := httptest.NewRecorder()
+	s.handleMe(w, accessRequest("alice", http.MethodGet, "/api/me", ""))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	var body struct {
+		TimeZone string `json:"timezone"`
+		Now      string `json:"now"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.TimeZone != "Asia/Shanghai" {
+		t.Fatalf("timezone = %q", body.TimeZone)
+	}
+	now, err := time.Parse(time.RFC3339, body.Now)
+	if err != nil {
+		t.Fatalf("now = %q: %v", body.Now, err)
+	}
+	if _, offset := now.Zone(); offset != 8*3600 {
+		t.Fatalf("now = %q, want the +08:00 offset of Asia/Shanghai", body.Now)
+	}
+	if drift := time.Since(now); drift < -time.Minute || drift > time.Minute {
+		t.Fatalf("now = %q is %v away from this clock", body.Now, drift)
+	}
+}

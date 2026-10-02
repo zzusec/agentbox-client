@@ -31,6 +31,12 @@ final class AgentboxClient {
         try await request("api/sessions")
     }
 
+    /// The signed-in user's own record, read for the server's clock and
+    /// timezone. Everything else in the response belongs to the web console.
+    func identity() async throws -> ServerIdentity {
+        try await request("api/me")
+    }
+
     func projects(in workspace: Workspace) async throws -> [RemoteProject] {
         let projects: [RemoteProject] = try await request(
             "api/sessions/\(escaped(workspace.id))/projects"

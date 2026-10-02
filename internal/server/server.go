@@ -627,6 +627,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"models":        s.cfg.GetModels(),
 		"terminal_tips": s.cfg.GetTerminalTips(),
 		"timezone":      s.cfg.GetTimeZone(),
+		// 服务器自己的墙钟，按同一个时区格式化：Mac 客户端拿它对表，之后本地走秒，
+		// 不必每秒请求一次。带偏移量的 RFC3339 让客户端不认识该时区名时仍能显示。
+		"now": time.Now().In(s.cfg.GetLocation()).Format(time.RFC3339),
 		// 自己的额度：metered 为 false 就是不限额，前端不必显示余额。
 		"quota": viewQuota(u.Name, q, metered),
 	})

@@ -419,6 +419,8 @@ export interface Me {
   terminal_tips: TerminalTips | null;
   /** 控制台显示与使用记录筛选使用的 IANA 时区 */
   timezone: string;
+  /** 服务器当前时间，按上面的时区格式化的 RFC3339；Mac 客户端用它对表 */
+  now: string;
   quota: Quota | null;
 }
 

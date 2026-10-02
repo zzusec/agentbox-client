@@ -43,6 +43,11 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     private var uploadObserver: NSObjectProtocol?
     /// How many shell tabs each project has opened, for "终端 N" titles.
     private var shellCounts: [String: Int] = [:]
+    /// The instance server's clock, shown in the sidebar. nil until the first
+    /// answer arrives, and on servers too old to report their time.
+    private var serverClock: ServerClock?
+    private var clockTimer: Timer?
+    private var clockSyncedAt = Date.distantPast
     private static let clockFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
@@ -451,6 +456,45 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             } catch {
                 sidebar.setStatus("加载空间失败：\(error.localizedDescription)")
             }
+        }
+        startServerClock()
+    }
+
+    /// One timer drives the sidebar's server clock: it paints every second and
+    /// asks the server again every five minutes. Painting locally is what keeps
+    /// it to one request per resync instead of one per second; resyncing is what
+    /// keeps the two machines' drift invisible at second resolution.
+    ///
+    /// The timer goes on the common run loop modes so the clock does not freeze
+    /// while a menu is open or the window is being resized, and holds the
+    /// controller weakly so it dies with the window.
+    private func startServerClock() {
+        syncServerClock()
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tickServerClock() }
+        }
+        timer.tolerance = 0.2
+        RunLoop.main.add(timer, forMode: .common)
+        clockTimer = timer
+    }
+
+    deinit { clockTimer?.invalidate() }
+
+    private func tickServerClock() {
+        guard let serverClock else { return }
+        sidebar.setServerClock(serverClock.text(), zone: serverClock.zoneName)
+        if Date().timeIntervalSince(clockSyncedAt) >= 300 { syncServerClock() }
+    }
+
+    private func syncServerClock() {
+        // Stamped before the request, not after it: a server that is down or
+        // too old must not be retried once a second.
+        clockSyncedAt = Date()
+        Task { @MainActor in
+            guard let identity = try? await client.identity(), let now = identity.now,
+                  let clock = ServerClock(now: now, timezone: identity.timezone ?? "") else { return }
+            serverClock = clock
+            sidebar.setServerClock(clock.text(), zone: clock.zoneName)
         }
     }
 

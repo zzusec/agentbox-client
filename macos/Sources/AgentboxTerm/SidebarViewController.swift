@@ -28,6 +28,9 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     private let localRoot = NSTextField(labelWithString: "尚未选择")
     private let chooseRootButton = FirstMouseButton(title: "选择目录", target: nil, action: nil)
     private let status = NSTextField(labelWithString: "正在连接…")
+    /// The instance server's wall clock, kept out of `status` so a passing
+    /// message ("正在读取项目…") cannot wipe it.
+    private let serverClock = NSTextField(labelWithString: "")
     private var workspaces: [Workspace] = []
     private var projects: [RemoteProject] = []
     private var workspaceID: String?
@@ -179,6 +182,11 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
         status.lineBreakMode = .byTruncatingTail
         status.maximumNumberOfLines = 2
 
+        serverClock.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        serverClock.textColor = NativeTheme.secondaryText
+        serverClock.lineBreakMode = .byTruncatingTail
+        serverClock.isHidden = true
+
         let stack = NSStackView(views: [
             brand,
             workspaceLabel,
@@ -186,6 +194,7 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
             projectHeader,
             projectArea,
             status,
+            serverClock,
         ])
         stack.orientation = .vertical
         stack.spacing = 10
@@ -229,6 +238,14 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
 
     func setStatus(_ value: String) {
         status.stringValue = value
+    }
+
+    /// Shows the server's time, or hides the line when there is none to show
+    /// (not connected yet, or a server older than the clock field).
+    func setServerClock(_ value: String?, zone: String? = nil) {
+        serverClock.stringValue = value.map { "服务器时间 " + $0 } ?? ""
+        serverClock.toolTip = zone.map { "实例所在服务器的时间 · \($0)" }
+        serverClock.isHidden = value == nil
     }
 
     func setLocalRoot(_ path: String?) {
