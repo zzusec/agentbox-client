@@ -35,6 +35,21 @@ final class TerminalSurface: TerminalView {
         allowMouseReporting = TerminalThemeManager.mouseMode != .off
     }
 
+    /// Repaints everything when the view is resized.
+    ///
+    /// SwiftTerm only invalidates the rows the terminal marked dirty, and of
+    /// its two resize paths only the `frame` setter also sets `needsDisplay`.
+    /// Auto Layout goes through `setFrameSize`, which does not — so widening
+    /// the view (hiding the sidebar, resizing the window) left the newly
+    /// uncovered strip showing whatever had been drawn there before: pieces of
+    /// an older frame stranded down the right-hand side, far from the text they
+    /// belonged to.
+    override func setFrameSize(_ newSize: NSSize) {
+        let resized = newSize != frame.size
+        super.setFrameSize(newSize)
+        if resized { needsDisplay = true }
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil {

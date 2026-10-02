@@ -952,6 +952,14 @@ struct AppSmokeChecks {
                      "the composition must show what is being typed")
         surface.unmarkText()
         precondition(composition.isHidden, "committing or cancelling must take the preview away")
+
+        // A resize has to repaint the whole surface: SwiftTerm invalidates only
+        // the rows the terminal marked dirty, so the strip a widening view
+        // uncovers would otherwise keep the pixels of an older frame.
+        surface.displayIfNeeded()
+        precondition(!surface.needsDisplay, "nothing should be pending before the resize")
+        surface.setFrameSize(NSSize(width: 800, height: 400))
+        precondition(surface.needsDisplay, "a resize must mark the whole surface for redraw")
     }
 
     /// Tabs pack to the left. The bar spans the window, and NSStackView's
