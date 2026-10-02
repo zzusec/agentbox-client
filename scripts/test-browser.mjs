@@ -472,7 +472,10 @@ export async function smoke(page) {
   await page.screenshot({path:resolve('output/playwright/transparent-network.png')});
   await page.reload();
   await at('#/tunnel','#view-tunnel');
-  await page.locator('.session-card[data-session-id="fixture-space"]').click();
+  // Instance cards only expand and collapse their project list since the
+  // instance → project navigation; a workspace's chat is reached by its URL.
+  await page.locator('.session-card[data-session-id="fixture-space"]').waitFor({state:'visible'});
+  await page.evaluate(()=>{ location.hash = '#/sessions/fixture-space/chat'; });
   await at('#/sessions/fixture-space/chat','#tab-chat');
   // Model capabilities: compatible choices survive, incompatible/unknown ones reset.
   await page.setViewportSize({width:1280,height:900});

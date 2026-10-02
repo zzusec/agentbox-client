@@ -71,7 +71,14 @@ func TestGitBridgeContainerLive(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer manager.Close()
+			// The server owns (and closes) the manager. With it attached,
+			// containerWorkspace sees that this fixture container does not
+			// mount the host workspace and falls back to its own /workspace —
+			// the same path production takes for a container predating the
+			// same-path mount. Without it Git was sent to the host path, which
+			// does not exist inside the container.
+			s.dock = manager
+			sess.ContainerID = created.ID
 			s.git = gitx.New(manager, func(context.Context, string) (string, func(), error) { return created.ID, func() {}, nil })
 			if err = s.store.Put(sess); err != nil {
 				t.Fatal(err)
@@ -145,7 +152,7 @@ func TestGitBridgeContainerLive(t *testing.T) {
 			}
 			run := func(args ...string) string {
 				t.Helper()
-				out, err := s.git.Run(ctx, sess.ID, s.workspaceDir(sess), "", args...)
+				out, err := s.git.Run(ctx, sess.ID, s.containerWorkspace(ctx, sess), "", args...)
 				if err != nil {
 					t.Fatalf("container Git %s: %v", args[0], err)
 				}
