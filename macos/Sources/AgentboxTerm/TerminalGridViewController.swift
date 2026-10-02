@@ -7,6 +7,9 @@ final class TerminalGridViewController: NSViewController {
     /// A tab was closed; the owner must forget it so the project can be
     /// reopened from the sidebar.
     var onPaneClosed: ((TerminalViewController) -> Void)?
+    /// Asks for another shell next to an existing tab: double-clicking the
+    /// empty part of the tab bar, or "新开终端" on a tab.
+    var onNewShell: ((TerminalViewController) -> Void)?
 
     private let tabBar = NSStackView()
     private let container = NSView()
@@ -26,6 +29,9 @@ final class TerminalGridViewController: NSViewController {
         tabBar.spacing = 6
         tabBar.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
         tabBar.translatesAutoresizingMaskIntoConstraints = false
+        let doubleClick = NSClickGestureRecognizer(target: self, action: #selector(tabBarDoubleClicked(_:)))
+        doubleClick.numberOfClicksRequired = 2
+        tabBar.addGestureRecognizer(doubleClick)
 
         container.translatesAutoresizingMaskIntoConstraints = false
         container.wantsLayer = true
@@ -173,6 +179,15 @@ final class TerminalGridViewController: NSViewController {
         onPaneClosed?(terminal)
     }
 
+    /// Double-click on the bar outside any tab: another shell for the project
+    /// of the tab in front, like a browser's new-tab gesture.
+    @objc private func tabBarDoubleClicked(_ gesture: NSClickGestureRecognizer) {
+        let point = gesture.location(in: tabBar)
+        guard !tabBar.arrangedSubviews.contains(where: { $0.frame.contains(point) }),
+              let anchor = selected ?? terminals.last else { return }
+        onNewShell?(anchor)
+    }
+
     private func refreshChip(for terminal: TerminalViewController) {
         for case let chip as TerminalTabChip in tabBar.arrangedSubviews where chip.paneKey == terminal.paneKey {
             chip.setConnection(terminal.connectionState)
@@ -191,6 +206,16 @@ final class TerminalGridViewController: NSViewController {
             chip.isSelected = terminal === selected
             chip.onSelect = { [weak self] in self?.select(terminal) }
             chip.onClose = { [weak self] in self?.remove(terminal) }
+            // Double-clicking a disconnected tab reconnects it.
+            chip.onDoubleClick = { [weak self] in
+                self?.select(terminal)
+                if terminal.isDisconnected { terminal.reconnect() }
+            }
+            chip.onReconnect = { [weak self] in
+                self?.select(terminal)
+                terminal.reconnect()
+            }
+            chip.onNewShell = { [weak self] in self?.onNewShell?(terminal) }
             chip.translatesAutoresizingMaskIntoConstraints = false
             tabBar.addArrangedSubview(chip)
         }
@@ -210,6 +235,10 @@ final class TerminalTabChip: NSView {
     var paneKey = ""
     var onSelect: (() -> Void)?
     var onClose: (() -> Void)?
+    var onDoubleClick: (() -> Void)?
+    var onReconnect: (() -> Void)?
+    var onNewShell: (() -> Void)?
+    private var path = ""
     var isSelected = false {
         didSet { restyle() }
     }
@@ -255,6 +284,7 @@ final class TerminalTabChip: NSView {
         wantsLayer = true
         layer?.cornerRadius = 7
         toolTip = path
+        self.path = path
         addSubview(content)
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: 28),
@@ -286,7 +316,31 @@ final class TerminalTabChip: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        onSelect?()
+        if event.clickCount == 2 {
+            onDoubleClick?()
+        } else {
+            onSelect?()
+        }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        let reconnect = menu.addItem(withTitle: "重新连接", action: #selector(reconnectClicked), keyEquivalent: "")
+        reconnect.target = self
+        let newShell = menu.addItem(withTitle: "新开终端", action: #selector(newShellClicked), keyEquivalent: "")
+        newShell.target = self
+        menu.addItem(.separator())
+        let close = menu.addItem(withTitle: "关闭标签", action: #selector(closeClicked), keyEquivalent: "")
+        close.target = self
+        return menu
+    }
+
+    @objc private func reconnectClicked() {
+        onReconnect?()
+    }
+
+    @objc private func newShellClicked() {
+        onNewShell?()
     }
 
     func setConnection(_ state: TerminalConnectionState) {
@@ -300,6 +354,7 @@ final class TerminalTabChip: NSView {
             color = NSColor(calibratedRed: 0.98, green: 0.44, blue: 0.52, alpha: 1)
         }
         dot.layer?.backgroundColor = color.cgColor
+        toolTip = state == .error ? "\(path)\n已断开：双击标签或在终端里按任意键重新连接" : path
     }
 
     private func restyle() {

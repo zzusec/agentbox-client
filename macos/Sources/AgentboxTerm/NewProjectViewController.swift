@@ -21,6 +21,19 @@ final class NewProjectViewController: NSViewController {
     }
 
     var onCreate: ((Draft) -> Void)?
+
+    /// What an existing project looks like now. Set before the view loads to
+    /// turn the sheet into "修改项目": every field starts from the project, and
+    /// the button saves instead of creating.
+    struct Prefill {
+        var name: String
+        var localDir: String?
+        var policy: String?
+        var agent: String
+        var command: String
+    }
+    var prefill: Prefill?
+    var isEditing: Bool { prefill != nil }
     /// The workspace's local root, used to preview the default directory.
     var localRoot: String?
     /// Tools the instance has accounts for, in display order, and the one it
@@ -66,10 +79,12 @@ final class NewProjectViewController: NSViewController {
         root.wantsLayer = true
         root.layer?.backgroundColor = NativeTheme.content.cgColor
 
-        let title = NSTextField(labelWithString: "新建项目")
+        let title = NSTextField(labelWithString: isEditing ? "修改项目" : "新建项目")
         title.font = .systemFont(ofSize: 17, weight: .semibold)
         title.textColor = NativeTheme.primaryText
-        let subtitle = NSTextField(labelWithString: "项目会在服务器工作区下创建，并同步到本地目录。")
+        let subtitle = NSTextField(labelWithString: isEditing
+            ? "改名会同时重命名服务器目录和本地文件夹；启动命令对之后打开的终端生效。"
+            : "项目会在服务器工作区下创建，并同步到本地目录。")
         subtitle.font = .systemFont(ofSize: 11)
         subtitle.textColor = NativeTheme.secondaryText
 
@@ -164,7 +179,7 @@ final class NewProjectViewController: NSViewController {
         let cancelButton = NSButton(title: "取消", target: self, action: #selector(cancelClicked))
         cancelButton.bezelStyle = .rounded
         cancelButton.keyEquivalent = "\u{1b}"
-        let createButton = NSButton(title: "新增", target: self, action: #selector(createClicked))
+        let createButton = NSButton(title: isEditing ? "保存" : "新增", target: self, action: #selector(createClicked))
         createButton.bezelStyle = .rounded
         createButton.bezelColor = NativeTheme.accent
         createButton.keyEquivalent = "\r"
@@ -211,6 +226,20 @@ final class NewProjectViewController: NSViewController {
         ])
         view = root
         preferredContentSize = NSSize(width: 480, height: 520)
+        if let prefill {
+            nameField.stringValue = prefill.name
+            customDir = (prefill.localDir?.isEmpty == false) ? prefill.localDir : nil
+            if let index = Self.policies.firstIndex(where: { $0.0 == prefill.policy }) {
+                policyPopup.selectItem(at: index)
+            }
+            if let index = agentPopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == prefill.agent }) {
+                agentPopup.selectItem(at: index)
+            }
+            // Treat the default for the current tool as "untouched", so a
+            // tool switch still swaps it; a custom command stays as typed.
+            shownDefaultCommand = ProjectLaunch.defaultCommand(for: selectedAgent)
+            commandField.stringValue = prefill.command
+        }
         refreshDirectory()
         refreshCommand()
     }
@@ -372,7 +401,7 @@ final class NewProjectViewController: NSViewController {
             draft.policy = Self.policies[index].0
         }
         let agent = selectedAgent
-        if agent != defaultAgent || availableAgents.count > 1 {
+        if isEditing || agent != defaultAgent || availableAgents.count > 1 {
             draft.agent = agent
         }
         if !command.isEmpty, command != ProjectLaunch.defaultCommand(for: agent) {

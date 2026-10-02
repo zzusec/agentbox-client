@@ -5,11 +5,10 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     var onSelectProject: ((RemoteProject) -> Void)?
     var onChooseLocalRoot: (() -> Void)?
     var onCreateProject: (() -> Void)?
-    var onRenameProject: ((RemoteProject) -> Void)?
-    /// "修改启动命令…": which tool the project terminal starts, and how.
-    var onEditProjectLaunch: ((RemoteProject) -> Void)?
+    /// "修改项目…": name, local directory, tool, command and sync mode in one
+    /// form.
+    var onEditProject: ((RemoteProject) -> Void)?
     var onChangeProjectLocalDir: ((RemoteProject) -> Void)?
-    var onChangeProjectPolicy: ((RemoteProject, String?) -> Void)?
     /// The ⟳ beside a sync mode: overwrite the other side immediately.
     var onSyncProjectNow: ((RemoteProject, String) -> Void)?
     /// Reveals the sync log, which is the only durable record of what a pass did.
@@ -20,8 +19,6 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     var onOpenShell: ((RemoteProject) -> Void)?
     var onCopyProjectPath: ((RemoteProject) -> Void)?
     var onDeleteProject: ((RemoteProject) -> Void)?
-    /// Current per-project sync policy, for the checkmark in the submenu.
-    var projectPolicyForDisplay: ((RemoteProject) -> String?)?
 
     private let workspacePicker = NSPopUpButton()
     private let projectTable = NSTableView()
@@ -69,14 +66,19 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
         NSPasteboard.general.setString(menuProject.path, forType: .string)
     }
 
-    @objc private func renameClicked() {
+    @objc private func editProjectClicked() {
         guard let menuProject else { return }
-        afterMenuCloses { [weak self] in self?.onRenameProject?(menuProject) }
+        afterMenuCloses { [weak self] in self?.onEditProject?(menuProject) }
     }
 
-    @objc private func editLaunchClicked() {
+    @objc private func syncFromServerClicked() {
         guard let menuProject else { return }
-        afterMenuCloses { [weak self] in self?.onEditProjectLaunch?(menuProject) }
+        afterMenuCloses { [weak self] in self?.onSyncProjectNow?(menuProject, "server") }
+    }
+
+    @objc private func syncFromLocalClicked() {
+        guard let menuProject else { return }
+        afterMenuCloses { [weak self] in self?.onSyncProjectNow?(menuProject, "local") }
     }
 
     @objc private func changeLocalDirClicked() {
@@ -500,197 +502,19 @@ extension SidebarViewController: NSMenuDelegate {
         menu.addItem(item("打开 AI 会话", "play", #selector(openClicked)))
         menu.addItem(item("复制路径", "doc.on.doc", #selector(copyPathClicked)))
         menu.addItem(.separator())
-        menu.addItem(item("修改项目名称…", "pencil", #selector(renameClicked)))
-        menu.addItem(item("修改启动命令…", "terminal", #selector(editLaunchClicked)))
-        menu.addItem(policyItem(for: project))
+        menu.addItem(item("修改项目…", "pencil", #selector(editProjectClicked)))
+        // Syncing now is an action, not a setting, so it stays out of the
+        // form: each side overwrites the other immediately, after a confirm.
+        let syncNow = NSMenuItem(title: "立即同步", action: nil, keyEquivalent: "")
+        syncNow.image = NativeTheme.symbol("arrow.triangle.2.circlepath", size: 13, weight: .medium)
+        let syncMenu = NSMenu()
+        syncMenu.addItem(item("从服务器下载到本地（覆盖本地）", "arrow.down.circle", #selector(syncFromServerClicked)))
+        syncMenu.addItem(item("从本地上传到服务器（覆盖服务器）", "arrow.up.circle", #selector(syncFromLocalClicked)))
+        syncNow.submenu = syncMenu
+        menu.addItem(syncNow)
         menu.addItem(item("打开同步日志", "doc.text.magnifyingglass", #selector(openSyncLogClicked)))
         menu.addItem(.separator())
         menu.addItem(item("删除…", "trash", #selector(deleteClicked), red: true))
     }
-
-    /// "修改同步方式" as a submenu, with the project's current choice checked.
-    ///
-    /// The two real modes also carry a ⟳ that overwrites the other side right
-    /// away. A plain NSMenuItem only has one click target, so those rows are
-    /// view-backed: the label picks the side, the ⟳ acts on it immediately.
-    private func policyItem(for project: RemoteProject) -> NSMenuItem {
-        let current = projectPolicyForDisplay?(project) ?? nil
-        let parent = NSMenuItem(title: "修改同步方式", action: nil, keyEquivalent: "")
-        parent.image = NativeTheme.symbol("arrow.triangle.2.circlepath", size: 13, weight: .medium)
-        let submenu = NSMenu()
-
-        let options: [(String, String?)] = [
-            (ProjectSyncSetting.policyLabel(nil), nil),
-            (ProjectSyncSetting.policyLabel("server"), "server"),
-            (ProjectSyncSetting.policyLabel("local"), "local"),
-        ]
-        for (title, policy) in options {
-            let item = NSMenuItem()
-            let row = SyncPolicyMenuRow(
-                title: title,
-                checked: current == policy,
-                onSelect: { [weak self] in self?.onChangeProjectPolicy?(project, policy) },
-                onSyncNow: policy.map { policy in
-                    { [weak self] in self?.onSyncProjectNow?(project, policy) }
-                }
-            )
-            item.view = row
-            submenu.addItem(item)
-        }
-        parent.submenu = submenu
-        return parent
-    }
 }
 
-/// One row of the 修改同步方式 submenu.
-///
-/// A plain NSMenuItem has a single click target, so a row that both picks a
-/// side and offers "sync now" has to be a view-backed item: the label selects,
-/// the trailing ⟳ overwrites immediately. Because the view covers the item,
-/// AppKit draws no selection behind it, so the row highlights itself on hover
-/// and switches to the selected text colour while it does.
-final class SyncPolicyMenuRow: NSView {
-    static let rowSize = NSSize(width: 224, height: 24)
-
-    let title: String
-    private(set) var isChecked: Bool
-    /// Whether this row carries the ⟳ (only the two real modes do).
-    var hasSyncNow: Bool { onSyncNow != nil }
-
-    private let checkmark = NSImageView()
-    private let titleLabel = NSTextField(labelWithString: "")
-    private let syncButton = NSButton()
-    private var trackingArea: NSTrackingArea?
-    private let onSelect: () -> Void
-    private let onSyncNow: (() -> Void)?
-
-    private var isHovered = false {
-        didSet {
-            guard isHovered != oldValue else { return }
-            applyColors()
-            needsDisplay = true
-        }
-    }
-
-    init(
-        title: String,
-        checked: Bool,
-        onSelect: @escaping () -> Void,
-        onSyncNow: (() -> Void)?
-    ) {
-        self.title = title
-        self.isChecked = checked
-        self.onSelect = onSelect
-        self.onSyncNow = onSyncNow
-        super.init(frame: NSRect(origin: .zero, size: Self.rowSize))
-        wantsLayer = true
-
-        checkmark.image = NativeTheme.symbol("checkmark", size: 11, weight: .semibold)
-        checkmark.translatesAutoresizingMaskIntoConstraints = false
-        checkmark.isHidden = !checked
-
-        titleLabel.stringValue = title
-        titleLabel.font = .menuFont(ofSize: 0)
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        syncButton.isBordered = false
-        syncButton.bezelStyle = .inline
-        syncButton.imagePosition = .imageOnly
-        syncButton.image = NativeTheme.symbol("arrow.triangle.2.circlepath", size: 12, weight: .semibold)
-        syncButton.translatesAutoresizingMaskIntoConstraints = false
-        syncButton.isHidden = onSyncNow == nil
-        syncButton.toolTip = "立即按此方式全量同步（覆盖另一侧）"
-        syncButton.target = self
-        syncButton.action = #selector(syncNowClicked)
-
-        addSubview(checkmark)
-        addSubview(titleLabel)
-        addSubview(syncButton)
-        NSLayoutConstraint.activate([
-            checkmark.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            checkmark.centerYAnchor.constraint(equalTo: centerYAnchor),
-            checkmark.widthAnchor.constraint(equalToConstant: 12),
-
-            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 34),
-            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-
-            syncButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            syncButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            syncButton.widthAnchor.constraint(equalToConstant: 18),
-            syncButton.heightAnchor.constraint(equalToConstant: 18),
-
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: syncButton.leadingAnchor, constant: -8),
-        ])
-        applyColors()
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    /// The menu highlights the whole row, so the label and glyphs have to
-    /// follow the selection colour to stay readable.
-    private func applyColors() {
-        let tint: NSColor = isHovered ? .selectedMenuItemTextColor : .labelColor
-        titleLabel.textColor = tint
-        checkmark.contentTintColor = tint
-        syncButton.contentTintColor = isHovered ? .selectedMenuItemTextColor : .secondaryLabelColor
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingArea {
-            removeTrackingArea(trackingArea)
-        }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways],
-            owner: self
-        )
-        addTrackingArea(area)
-        trackingArea = area
-    }
-
-    override func mouseEntered(with event: NSEvent) { isHovered = true }
-    override func mouseExited(with event: NSEvent) { isHovered = false }
-
-    override func draw(_ dirtyRect: NSRect) {
-        if isHovered {
-            NSColor.selectedContentBackgroundColor.setFill()
-            NSBezierPath(
-                roundedRect: bounds.insetBy(dx: 5, dy: 0),
-                xRadius: 4,
-                yRadius: 4
-            ).fill()
-        }
-        super.draw(dirtyRect)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        select()
-    }
-
-    @objc private func syncNowClicked() {
-        performSyncNow()
-    }
-
-    /// Exposed so the smoke checks can exercise both targets without a real
-    /// click; the menu only ever runs these under a live right-click.
-    ///
-    /// Both close the menu *before* handing control on, and defer the action
-    /// to the next run-loop turn. The menu's tracking loop is still on the
-    /// stack while an item is being chosen, and anything modal started inside
-    /// it — an alert, a panel — comes up with the menu still open behind it
-    /// and never sees the clicks meant for it.
-    func select() {
-        let action = onSelect
-        enclosingMenuItem?.menu?.cancelTracking()
-        DispatchQueue.main.async { action() }
-    }
-
-    func performSyncNow() {
-        let action = onSyncNow
-        enclosingMenuItem?.menu?.cancelTracking()
-        DispatchQueue.main.async { action?() }
-    }
-}

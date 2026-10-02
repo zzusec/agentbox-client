@@ -405,14 +405,14 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         sidebar.onCreateProject = { [weak self] in
             self?.createProject()
         }
+        terminalGrid.onNewShell = { [weak self] terminal in
+            self?.openShell(terminal.project, in: terminal.workspace)
+        }
         terminalGrid.onPaneClosed = { [weak self] terminal in
             self?.terminals.removeValue(forKey: terminal.paneKey)
         }
-        sidebar.onRenameProject = { [weak self] project in
-            self?.renameProject(project)
-        }
-        sidebar.onEditProjectLaunch = { [weak self] project in
-            self?.editProjectLaunch(project)
+        sidebar.onEditProject = { [weak self] project in
+            self?.editProject(project)
         }
         uploadObserver = NotificationCenter.default.addObserver(
             forName: UploadProgressNote.name,
@@ -424,18 +424,11 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         sidebar.onChangeProjectLocalDir = { [weak self] project in
             self?.changeProjectLocalDir(project)
         }
-        sidebar.onChangeProjectPolicy = { [weak self] project, policy in
-            self?.changeProjectPolicy(project, policy: policy)
-        }
         sidebar.onSyncProjectNow = { [weak self] project, policy in
             self?.syncProjectNow(project, policy: policy)
         }
         sidebar.onOpenSyncLog = {
             NSWorkspace.shared.activateFileViewerSelecting([SyncManager.logURL])
-        }
-        sidebar.projectPolicyForDisplay = { [weak self] project in
-            guard let self, let workspace = self.workspace else { return nil }
-            return self.projectSettings(for: workspace)[project.id]?.policy
         }
         sidebar.onOpenShell = { [weak self] project in
             self?.openShell(project)
@@ -526,8 +519,8 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     /// A new shell tab in the instance container, starting in the project
     /// directory. Unlike the AI session there is no "already open" check:
     /// every request is another independent shell.
-    private func openShell(_ project: RemoteProject) {
-        guard let workspace else { return }
+    private func openShell(_ project: RemoteProject, in target: Workspace? = nil) {
+        guard let workspace = target ?? workspace else { return }
         let key = "\(workspace.id)/\(project.name)"
         let index = (shellCounts[key] ?? 0) + 1
         shellCounts[key] = index
@@ -634,64 +627,83 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         presentAsSheet(sheet)
     }
 
-    /// Right-click "修改启动命令…": pick the tool and edit the command the
-    /// project terminal starts with. A terminal already running keeps its
-    /// process; closing it and opening the project again uses the change.
-    private func editProjectLaunch(_ project: RemoteProject) {
+    /// Right-click "修改项目…": one form for the name, the local directory,
+    /// the tool, the launch command and the sync mode, prefilled from the
+    /// project. Only what changed is applied.
+    private func editProject(_ project: RemoteProject) {
         guard let workspace, workspace.id == self.workspace?.id else { return }
+        let setting = projectSettings(for: workspace)[project.id]
         let tools = workspace.tools.isEmpty ? ["claude"] : workspace.tools
         let currentAgent = project.agent.isEmpty
             ? (tools.contains(workspace.agent) ? workspace.agent : tools[0])
             : project.agent
-
-        let alert = NSAlert()
-        alert.messageText = "修改「\(project.name)」的启动命令"
-        alert.informativeText = "已打开的终端不受影响；关闭后重新打开项目终端生效。清空命令即恢复所选工具的默认命令。"
-        alert.addButton(withTitle: "保存")
-        alert.addButton(withTitle: "取消")
-
-        let agentPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 26))
-        for tool in tools {
-            agentPopup.addItem(withTitle: ProjectLaunch.label(for: tool))
-            agentPopup.lastItem?.representedObject = tool
-        }
-        if let index = tools.firstIndex(of: currentAgent) {
-            agentPopup.selectItem(at: index)
-        }
-        agentPopup.isEnabled = tools.count > 1
-        let commandField = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
-        commandField.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        commandField.stringValue = project.command.isEmpty
+        let currentCommand = project.command.isEmpty
             ? ProjectLaunch.defaultCommand(for: currentAgent)
             : project.command
-        commandField.placeholderString = ProjectLaunch.defaultCommand(for: currentAgent)
-        let stack = NSStackView(views: [agentPopup, commandField])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 8
-        stack.frame = NSRect(x: 0, y: 0, width: 360, height: 60)
-        alert.accessoryView = stack
-        alert.window.initialFirstResponder = commandField
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        let agent = (agentPopup.selectedItem?.representedObject as? String) ?? currentAgent
-        var command = commandField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Switching tools without touching the old tool's default command
-        // means "the new tool's default", not "run claude in a codex project".
-        if agent != currentAgent, command == ProjectLaunch.defaultCommand(for: currentAgent) {
-            command = ""
+        let sheet = NewProjectViewController()
+        sheet.localRoot = UserDefaults.standard.string(forKey: localRootKey(workspace))
+        sheet.availableAgents = tools
+        sheet.defaultAgent = currentAgent
+        sheet.prefill = .init(
+            name: project.name,
+            localDir: setting?.localDir,
+            policy: setting?.policy,
+            agent: currentAgent,
+            command: currentCommand
+        )
+        sheet.onCreate = { [weak self] draft in
+            self?.applyProjectEdit(project, in: workspace, draft: draft,
+                                   currentAgent: currentAgent, currentCommand: currentCommand, setting: setting)
         }
+        presentAsSheet(sheet)
+    }
+
+    private func applyProjectEdit(
+        _ project: RemoteProject,
+        in workspace: Workspace,
+        draft: NewProjectViewController.Draft,
+        currentAgent: String,
+        currentCommand: String,
+        setting: ProjectSyncSetting?
+    ) {
         Task { @MainActor in
-            do {
-                let updated = try await client.updateProjectLaunch(project, agent: agent, command: command, in: workspace)
-                sidebar.setProjects(try await client.projects(in: workspace))
-                showSyncStatus("\(updated.name) 启动命令：\(updated.command.isEmpty ? ProjectLaunch.defaultCommand(for: agent) : updated.command)")
-            } catch {
-                let errorAlert = NSAlert()
-                errorAlert.messageText = "修改启动命令失败"
-                errorAlert.informativeText = error.localizedDescription
-                errorAlert.alertStyle = .warning
-                errorAlert.runModal()
+            // Launch settings first: they are a plain server update and are
+            // keyed by project ID, so a rename afterwards keeps them.
+            let agent = draft.agent ?? currentAgent
+            let command = draft.command ?? ProjectLaunch.defaultCommand(for: agent)
+            if agent != currentAgent || command != currentCommand {
+                do {
+                    _ = try await client.updateProjectLaunch(project, agent: agent, command: draft.command ?? "", in: workspace)
+                } catch {
+                    let failure = NSAlert()
+                    failure.messageText = "修改启动命令失败"
+                    failure.informativeText = error.localizedDescription
+                    failure.alertStyle = .warning
+                    failure.runModal()
+                    return
+                }
+            }
+            if draft.policy != setting?.policy {
+                changeProjectPolicy(project, policy: draft.policy)
+            }
+            let oldDir = (setting?.localDir?.isEmpty == false) ? setting?.localDir : nil
+            if draft.localDir != oldDir {
+                if let dir = draft.localDir {
+                    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+                    applyProjectLocalDir(URL(fileURLWithPath: dir, isDirectory: true), for: project, in: workspace)
+                } else {
+                    updateProjectSetting(for: workspace, project: project) { $0.localDir = nil }
+                    restartSync(workspace)
+                }
+            }
+            if draft.name != project.name {
+                // Last: the rename stops and restarts sync around moving the
+                // folders, and refreshes the list itself.
+                renameProject(project, to: draft.name)
+            } else {
+                sidebar.setProjects((try? await client.projects(in: workspace)) ?? [])
+                showSyncStatus("已保存「\(project.name)」的设置")
             }
         }
     }
@@ -699,19 +711,10 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     /// Right-click rename: stop the sync engine, move the local folder, rename
     /// on the server (which renames the server-side directory), ask which side
     /// wins for the next bootstrap, then restart syncing.
-    private func renameProject(_ project: RemoteProject) {
+    /// Renames a project on both sides; the name comes from the 修改项目 form.
+    private func renameProject(_ project: RemoteProject, to requestedName: String) {
         guard let workspace, workspace.id == self.workspace?.id else { return }
-        let alert = NSAlert()
-        alert.messageText = "重命名项目"
-        alert.informativeText = "服务器目录和本地文件夹会一起改名。"
-        alert.addButton(withTitle: "重命名")
-        alert.addButton(withTitle: "取消")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        field.stringValue = project.name
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let newName = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newName = requestedName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !newName.isEmpty, newName != project.name else { return }
         guard !newName.contains("/"), !newName.hasPrefix(".") else {
             sidebar.setStatus("项目名称无效")

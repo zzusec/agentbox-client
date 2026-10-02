@@ -662,6 +662,29 @@ struct AppSmokeChecks {
         precondition(pasted.pathExtension == "png" && FileManager.default.fileExists(atPath: pasted.path))
         try? FileManager.default.removeItem(at: pasted)
 
+        // A tab offers reconnecting and a new shell; double-click reconnects.
+        let chip = TerminalTabChip(title: "demo", path: "/w/demo", state: .error)
+        var chipReconnected = false, chipNewShell = false, chipDoubled = false
+        chip.onReconnect = { chipReconnected = true }
+        chip.onNewShell = { chipNewShell = true }
+        chip.onDoubleClick = { chipDoubled = true }
+        let rightClick = NSEvent.mouseEvent(
+            with: .rightMouseDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+            context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        )!
+        guard let chipMenu = chip.menu(for: rightClick) else { preconditionFailure("a tab must have a menu") }
+        precondition(chipMenu.items.map(\.title).starts(with: ["重新连接", "新开终端"]), "tab menu: \(chipMenu.items.map(\.title))")
+        for item in chipMenu.items.prefix(2) {
+            precondition(NSApp.sendAction(item.action!, to: item.target, from: item))
+        }
+        precondition(chipReconnected && chipNewShell)
+        chip.mouseDown(with: NSEvent.mouseEvent(
+            with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+            context: nil, eventNumber: 0, clickCount: 2, pressure: 1
+        )!)
+        precondition(chipDoubled, "double-clicking a tab must reach its handler")
+        precondition(chip.toolTip?.contains("双击") == true, "a disconnected tab must say how to reconnect")
+
         // Double-clicking the title bar zooms; a click in the content does not count.
         let blank = NSViewController()
         blank.view = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
@@ -780,20 +803,20 @@ struct AppSmokeChecks {
         let sidebar = SidebarViewController()
         sidebar.loadViewIfNeeded()
         let project = RemoteProject(id: "p1", name: "demo", path: "/workspace/demo")
-        var renamed: RemoteProject?
-        var changedPolicy: (project: RemoteProject, policy: String?)?
+        var edited: RemoteProject?
         var syncedNow: (project: RemoteProject, policy: String)?
-        sidebar.onRenameProject = { renamed = $0 }
-        sidebar.onChangeProjectPolicy = { changedPolicy = (project: $0, policy: $1) }
+        sidebar.onEditProject = { edited = $0 }
         sidebar.onSyncProjectNow = { syncedNow = (project: $0, policy: $1) }
-        sidebar.projectPolicyForDisplay = { _ in "server" }
 
         let menu = NSMenu()
         sidebar.populate(menu, with: project)
         let titles = menu.items.map(\.title)
-        precondition(titles.contains("修改项目名称…"), "menu must offer renaming: \(titles)")
-        precondition(!titles.contains("修改本地工作空间…"), "removed local-directory action must stay absent: \(titles)")
-        precondition(titles.contains("修改同步方式"), "menu must offer the sync mode: \(titles)")
+        // Name, directory, tool, command and sync mode live in one form now.
+        precondition(titles.contains("修改项目…"), "menu must offer editing the project: \(titles)")
+        for gone in ["修改项目名称…", "修改启动命令…", "修改同步方式", "修改本地工作空间…"] {
+            precondition(!titles.contains(gone), "\(gone) folded into 修改项目… must stay absent: \(titles)")
+        }
+        precondition(titles.contains("立即同步"), "menu must keep 立即同步: \(titles)")
         precondition(titles.contains("打开同步日志"), "menu must offer the sync log: \(titles)")
         // The log is the only durable record of what a pass did.
         precondition(
@@ -801,70 +824,46 @@ struct AppSmokeChecks {
             "unexpected sync log path: \(SyncManager.logURL.path)"
         )
 
-        guard let policyItem = menu.items.first(where: { $0.title == "修改同步方式" }),
-              let policyMenu = policyItem.submenu else {
-            preconditionFailure("修改同步方式 must be a submenu")
-        }
-        // The sync modes are view-backed rows: a native item can only carry one
-        // click target, and these need two (pick the side, and sync now).
-        let rows = policyMenu.items.compactMap { $0.view as? SyncPolicyMenuRow }
-        precondition(rows.count == 3, "expected three sync modes, got \(rows.count)")
-        precondition(
-            rows.map(\.title) == ["双向同步（默认）", "从服务器下载到本地", "从本地上传到服务器"],
-            "unexpected sync modes: \(rows.map(\.title))"
-        )
-        precondition(
-            rows.filter(\.isChecked).map(\.title) == ["从服务器下载到本地"],
-            "the project's current policy must be the checked row"
-        )
-        precondition(
-            rows.filter(\.hasSyncNow).map(\.title) == ["从服务器下载到本地", "从本地上传到服务器"],
-            "only the two real modes may offer 立即同步"
-        )
+        // Menu actions are handed over after the menu closes: modal UI started
+        // inside a live tracking loop comes up behind the open menu.
+        let editItem = menu.items.first { $0.title == "修改项目…" }!
+        precondition(NSApp.sendAction(editItem.action!, to: editItem.target, from: editItem))
+        precondition(edited == nil, "the edit must not open inside menu tracking")
+        try await drainMainQueue()
+        precondition(edited?.id == "p1", "a deferred menu action must still land")
 
-        let renameItem = menu.items.first { $0.title == "修改项目名称…" }!
-        if let output = ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_MENU_IMAGE"] {
-            let size = SyncPolicyMenuRow.rowSize
-            let canvas = NSImage(size: NSSize(width: size.width, height: size.height * CGFloat(rows.count)))
-            canvas.lockFocus()
-            NSColor.windowBackgroundColor.setFill()
-            NSRect(origin: .zero, size: canvas.size).fill()
-            for (index, row) in rows.enumerated() {
-                row.frame = NSRect(origin: .zero, size: size)
-                row.layoutSubtreeIfNeeded()
-                let rowBitmap = row.bitmapImageRepForCachingDisplay(in: row.bounds)!
-                row.cacheDisplay(in: row.bounds, to: rowBitmap)
-                rowBitmap.draw(in: NSRect(
-                    x: 0,
-                    y: size.height * CGFloat(rows.count - 1 - index),
-                    width: size.width,
-                    height: size.height
-                ))
-            }
-            canvas.unlockFocus()
-            let rep = NSBitmapImageRep(data: canvas.tiffRepresentation!)!
-            try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
+        guard let syncMenu = menu.items.first(where: { $0.title == "立即同步" })?.submenu,
+              syncMenu.items.count == 2 else {
+            preconditionFailure("立即同步 must offer both directions")
         }
-        precondition(NSApp.sendAction(renameItem.action!, to: renameItem.target, from: renameItem))
+        let fromServer = syncMenu.items[0], fromLocal = syncMenu.items[1]
+        precondition(NSApp.sendAction(fromServer.action!, to: fromServer.target, from: fromServer))
         try await drainMainQueue()
-        precondition(renamed?.id == "p1", "a deferred menu action must still land")
+        precondition(syncedNow?.project.id == "p1" && syncedNow?.policy == "server")
+        precondition(NSApp.sendAction(fromLocal.action!, to: fromLocal.target, from: fromLocal))
+        try await drainMainQueue()
+        precondition(syncedNow?.policy == "local")
 
-        // Tapping the row only picks the side...
-        rows[2].select()
-        // ...and it must be handed over *after* the menu closes: modal UI
-        // started inside a live tracking loop comes up behind the open menu
-        // and never sees the clicks meant for it.
-        precondition(changedPolicy == nil, "the row must not run its action inside menu tracking")
-        try await drainMainQueue()
-        let picked = changedPolicy
-        precondition(picked != nil && picked!.project.id == "p1" && picked!.policy == "local")
-        precondition(syncedNow == nil, "picking a side must not sync on its own")
-        // ...while the ⟳ reports an immediate overwrite for that side.
-        rows[1].performSyncNow()
-        precondition(syncedNow == nil, "the ⟳ must not run inside menu tracking either")
-        try await drainMainQueue()
-        let forced = syncedNow
-        precondition(forced != nil && forced!.project.id == "p1" && forced!.policy == "server")
+        // 修改项目… reuses the new-project form, prefilled from the project.
+        let editSheet = NewProjectViewController()
+        editSheet.localRoot = "/tmp/agentbox-root"
+        editSheet.availableAgents = ["claude", "codex"]
+        editSheet.defaultAgent = "codex"
+        editSheet.prefill = .init(name: "demo", localDir: "/tmp/elsewhere/demo", policy: "server",
+                                  agent: "codex", command: "codex --yolo --search")
+        editSheet.loadViewIfNeeded()
+        let editViews = views(in: editSheet.view)
+        func editField(_ id: NewProjectViewController.Field) -> NSView? {
+            editViews.first { $0.identifier?.rawValue == id.rawValue }
+        }
+        precondition((editField(.name) as? NSTextField)?.stringValue == "demo")
+        precondition((editField(.localDir) as? NSTextField)?.stringValue == "/tmp/elsewhere/demo")
+        precondition((editField(.command) as? NSTextField)?.stringValue == "codex --yolo --search")
+        precondition((editField(.policy) as? NSPopUpButton)?.indexOfSelectedItem == 1, "policy server is the second mode")
+        precondition((editField(.create) as? NSButton)?.title == "保存")
+        let editDraft = editSheet.makeDraft()!
+        precondition(editDraft.agent == "codex" && editDraft.command == "codex --yolo --search"
+                     && editDraft.policy == "server" && editDraft.localDir == "/tmp/elsewhere/demo")
     }
 
     /// Lets queued main-queue work run so a deferred menu action lands.

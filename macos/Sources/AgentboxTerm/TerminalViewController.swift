@@ -39,6 +39,14 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
     /// The file's path is inserted only once the upload finishes; sending the
     /// typing straight through would put the path in the middle of it.
     private var heldInput = Data()
+
+    /// Reconnection: a dropped link is retried with growing delays; a session
+    /// another window took over, or a refusal (quota, revoked access), waits
+    /// for the user — retrying those would only fight the other window or
+    /// knock on a closed door.
+    private var closedByUser = false
+    private var reconnectAttempt = 0
+    private var reconnectWork: DispatchWorkItem?
     private var uploadBatches = 0
     private var uploadTasks: [UUID: Task<Void, Never>] = [:]
     private let uploadBanner = NSVisualEffectView()
@@ -139,7 +147,55 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         }
     }
 
+    /// Decides what a closed connection means.
+    private func connectionClosed(code: Int, reason: String) {
+        setConnection(.error)
+        guard !closedByUser else { return }
+        let dim = "\u{001B}[2m", red = "\u{001B}[31m", reset = "\u{001B}[0m"
+        switch code {
+        case 4000..<5000:
+            // The server refused on purpose (quota, account access); the
+            // reason says why, and retrying would just be refused again.
+            let text = reason.isEmpty ? "服务器关闭了连接" : reason
+            surface.feed(text: "\r\n\(red)\(text)\(reset)\r\n\(dim)处理后双击标签或按任意键重新连接。\(reset)\r\n")
+        case 1000:
+            // A clean close: tmux handed the session to another window (or
+            // the shell exited). Taking it straight back would make two
+            // windows pull it back and forth.
+            surface.feed(text: "\r\n\(dim)连接已结束（会话可能已在其他窗口打开）。双击标签或按任意键重新连接。\(reset)\r\n")
+        default:
+            // No close frame: the network dropped or the server restarted.
+            let delay = min(15.0, pow(2.0, Double(reconnectAttempt)))
+            reconnectAttempt += 1
+            surface.feed(text: "\r\n\(dim)连接中断，\(Int(delay)) 秒后自动重连…（按任意键立即重连）\(reset)\r\n")
+            let work = DispatchWorkItem { [weak self] in self?.reconnect(manual: false) }
+            reconnectWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        }
+    }
+
+    /// Opens a fresh connection to the same session. tmux keeps the session
+    /// alive across disconnects, so this lands back where the user was.
+    func reconnect(manual: Bool = true) {
+        guard !closedByUser else { return }
+        reconnectWork?.cancel()
+        reconnectWork = nil
+        if manual { reconnectAttempt = 0 }
+        let old = bridge
+        bridge = nil
+        old?.close()
+        lastSentCols = 0
+        lastSentRows = 0
+        surface.feed(text: "\r\n\u{001B}[2m正在重新连接…\u{001B}[0m\r\n")
+        connect()
+    }
+
+    var isDisconnected: Bool { connectionState == .error }
+
     func closeSession() {
+        closedByUser = true
+        reconnectWork?.cancel()
+        reconnectWork = nil
         cancelUploads()
         bridge?.close()
         bridge = nil
@@ -207,6 +263,7 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         var aligned = false
         bridge.onData = { [weak self, weak bridge] data in
             guard let self else { return }
+            self.reconnectAttempt = 0
             self.setConnection(.connected)
             self.surface.feed(byteArray: ArraySlice(data))
             if !aligned, let bridge, bridge === self.bridge {
@@ -216,16 +273,18 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
                 }
             }
         }
-        bridge.onStatus = { [weak self] status in
-            guard let self else { return }
+        bridge.onStatus = { [weak self, weak bridge] status in
+            guard let self, let bridge, bridge === self.bridge else { return }
             if status == "connecting" {
                 self.setConnection(.connecting)
-                return
-            }
-            if status.hasPrefix("closed") || status.hasPrefix("send failed") {
+            } else if status == "send failed" {
+                // The close report follows and decides what happens next.
                 self.setConnection(.error)
-                self.surface.feed(text: "\r\n\u{001B}[31m\(status)\u{001B}[0m\r\n")
             }
+        }
+        bridge.onClosed = { [weak self, weak bridge] code, reason in
+            guard let self, let bridge, bridge === self.bridge else { return }
+            self.connectionClosed(code: code, reason: reason)
         }
         bridge.connect()
         DispatchQueue.main.async { [weak self] in
@@ -404,6 +463,12 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
 
     func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        // A key on a dead connection reconnects instead of failing; the key
+        // itself is dropped, since the user cannot see where it would land.
+        if connectionState == .error {
+            reconnect()
+            return
+        }
         if uploadBatches > 0 {
             heldInput.append(contentsOf: data)
             return
