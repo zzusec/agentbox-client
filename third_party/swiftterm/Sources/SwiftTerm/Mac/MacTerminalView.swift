@@ -451,8 +451,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// than the window's appearance — a light track on a dark terminal (or
     /// the reverse) reads as a stray bar.
     func updateScrollerAppearance () {
-        guard let scroller else { return }
-        let rgb = nativeBackgroundColor.usingColorSpace(.sRGB) ?? nativeBackgroundColor
+        // Both are set up during init, in either order.
+        guard let scroller, let bg = _nativeBg else { return }
+        let rgb = bg.usingColorSpace(.sRGB) ?? bg
         let luminance = 0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent
         scroller.appearance = NSAppearance(named: luminance < 0.5 ? .darkAqua : .aqua)
     }
