@@ -238,7 +238,9 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
         projectTable.reloadData()
         projectScroll.isHidden = projects.isEmpty
         emptyState.isHidden = !projects.isEmpty
-        status.stringValue = projects.isEmpty ? "" : "双击项目进入 Claude"
+        // No standing hint here: the line is for what just happened (loading,
+        // failures), and a permanent tip only trained people to ignore it.
+        status.stringValue = ""
     }
 
     func setStatus(_ value: String) {

@@ -873,7 +873,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             // the old project vanish and the new one appear mid-rename.
             syncManager?.stop()
             syncManager = nil
-            defer { sidebar.setStatus("双击项目进入 Claude") }
+            defer { sidebar.setStatus("") }
 
             // Local folder first; roll it back if the server rejects the name.
             // A project with its own local directory keeps it — only the
@@ -974,7 +974,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             }
             syncManager?.stop()
             syncManager = nil
-            defer { sidebar.setStatus("双击项目进入 Claude") }
+            defer { sidebar.setStatus("") }
 
             do {
                 try await client.deleteProject(project, in: workspace)

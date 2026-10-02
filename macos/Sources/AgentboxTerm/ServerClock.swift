@@ -39,26 +39,17 @@ struct ServerClock {
         localNow.addingTimeInterval(offset)
     }
 
-    /// "14:09:12", or "10-03 14:09:12" once the server is on a different
-    /// calendar day than this Mac — the case that makes timestamps confusing
-    /// in the first place, so it is worth the extra width.
+    /// "2026-10-02 14:09:12". The date is always there: the server is often on
+    /// another date than this Mac, which is the whole reason for showing its
+    /// clock, and a bare time would hide exactly that.
     func text(at localNow: Date = Date()) -> String {
-        let serverNow = date(at: localNow)
         // A fresh formatter per tick: once a second costs nothing, and a shared
         // mutable DateFormatter would not be safe to retime from anywhere else.
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = zone
-        formatter.dateFormat = sameDay(serverNow, asLocally: localNow) ? "HH:mm:ss" : "MM-dd HH:mm:ss"
-        return formatter.string(from: serverNow)
-    }
-
-    private func sameDay(_ serverNow: Date, asLocally localNow: Date) -> Bool {
-        var serverCalendar = Calendar(identifier: .gregorian)
-        serverCalendar.timeZone = zone
-        let there = serverCalendar.dateComponents([.year, .month, .day], from: serverNow)
-        let here = Calendar.current.dateComponents([.year, .month, .day], from: localNow)
-        return there.year == here.year && there.month == here.month && there.day == here.day
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter.string(from: date(at: localNow))
     }
 
     /// RFC 3339, which is what the server's `now` field carries. Go's

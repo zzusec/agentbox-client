@@ -1111,7 +1111,9 @@ struct AppSmokeChecks {
         let serverFormatter = DateFormatter()
         serverFormatter.locale = Locale(identifier: "en_US_POSIX")
         serverFormatter.timeZone = TimeZone(identifier: AppHTTPFixture.serverZone)!
-        serverFormatter.dateFormat = "HH:mm"
+        // Date and time: the server is usually on another date than the Mac,
+        // which is the point of showing its clock at all.
+        serverFormatter.dateFormat = "yyyy-MM-dd HH:mm"
         // A minute can roll over between the client's sync and this check, so
         // the neighbouring minutes count as a match too.
         let expectedClock = [-60.0, 0, 60].map {
