@@ -156,11 +156,41 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         Task { @MainActor in
             var serverPaths: [String] = []
             for url in urls {
+                let file = url.lastPathComponent
+                let projectName = project.name
+                let started = Date()
+                // Progress hops to the main queue asynchronously and can land
+                // after the upload returned; it must not reopen a finished bar.
+                let settled = UploadSettled()
+                UploadProgressNote.post(file: file, project: projectName, state: .running(fraction: 0))
                 do {
-                    if let remote = try await client.upload(file: url, workspace: workspace, project: project.name) {
+                    let remote = try await client.upload(
+                        file: url,
+                        workspace: workspace,
+                        project: projectName,
+                        onProgress: { fraction in
+                            DispatchQueue.main.async {
+                                guard !settled.value else { return }
+                                UploadProgressNote.post(file: file, project: projectName, state: .running(fraction: fraction))
+                            }
+                        }
+                    )
+                    let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+                    let elapsed = Int64(Date().timeIntervalSince(started) * 1000)
+                    settled.value = true
+                    UploadProgressNote.post(
+                        file: file, project: projectName,
+                        state: .finished(bytes: size, milliseconds: elapsed)
+                    )
+                    if let remote {
                         serverPaths.append(remote)
                     }
                 } catch {
+                    settled.value = true
+                    UploadProgressNote.post(
+                        file: file, project: projectName,
+                        state: .failed(message: error.localizedDescription)
+                    )
                     let alert = NSAlert()
                     alert.messageText = "上传失败"
                     alert.informativeText = "\(url.lastPathComponent)：\(error.localizedDescription)"
@@ -221,4 +251,9 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
     func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
 
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+}
+
+/// Main-queue-only flag shared between an upload and its progress callbacks.
+private final class UploadSettled {
+    var value = false
 }

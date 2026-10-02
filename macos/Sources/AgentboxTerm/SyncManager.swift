@@ -2,6 +2,9 @@ import Foundation
 
 final class SyncManager {
     var onStatus: ((String) -> Void)?
+    /// Structured progress, per-file transfers and the in-sync verdict, from
+    /// the watcher's `-events` stream. Delivered on the main queue.
+    var onEvent: ((SyncEvent) -> Void)?
 
     private let client: AgentboxClient
     private let workspace: Workspace
@@ -10,6 +13,11 @@ final class SyncManager {
     private let projectSettings: [String: ProjectSyncSetting]
     private var process: Process?
     private var output: Pipe?
+    private var events: Pipe?
+    /// Bytes of stdout that have not reached a newline yet. A read can end in
+    /// the middle of a JSON line; decoding it then would drop the event.
+    private var pendingEvents = Data()
+    private let pendingLock = NSLock()
     private var configURL: URL?
     private static let logQueue = DispatchQueue(label: "agentbox.sync.log")
     private static let logStamp = ISO8601DateFormatter()
@@ -40,21 +48,33 @@ final class SyncManager {
             configURL = config
             let process = Process()
             process.executableURL = executable
-            process.arguments = ["-config", config.path, "-watch"]
+            // -events puts machine-readable progress on stdout and leaves the
+            // human log on stderr, so neither has to be parsed out of the other.
+            process.arguments = ["-config", config.path, "-watch", "-events"]
             process.environment = ProcessInfo.processInfo.environment.merging([
                 "AGENTBOX_TOKEN": client.token,
             ]) { _, new in new }
             let pipe = Pipe()
-            process.standardOutput = pipe
+            let eventPipe = Pipe()
+            process.standardOutput = eventPipe
             process.standardError = pipe
             pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
                 let data = handle.availableData
                 guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
                 self?.emit(text)
             }
+            pendingLock.lock()
+            pendingEvents.removeAll()
+            pendingLock.unlock()
+            eventPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+                let data = handle.availableData
+                guard !data.isEmpty else { return }
+                self?.consumeEvents(data)
+            }
             try process.run()
             self.process = process
             self.output = pipe
+            self.events = eventPipe
             emit("同步已启动：\(localRoot.path)")
         } catch {
             emit("同步启动失败：\(error.localizedDescription)")
@@ -64,6 +84,8 @@ final class SyncManager {
     func stop() {
         output?.fileHandleForReading.readabilityHandler = nil
         output = nil
+        events?.fileHandleForReading.readabilityHandler = nil
+        events = nil
         if let process, process.isRunning {
             emit("同步已停止")
             process.terminate()
@@ -82,6 +104,27 @@ final class SyncManager {
         appendToLog(trimmed)
         DispatchQueue.main.async { [weak self] in
             self?.onStatus?(trimmed)
+        }
+    }
+
+    /// Splits stdout into lines and decodes each as an event. Anything that is
+    /// not an event (there should be nothing) is ignored rather than shown.
+    func consumeEvents(_ data: Data) {
+        pendingLock.lock()
+        pendingEvents.append(data)
+        var lines: [Data] = []
+        while let newline = pendingEvents.firstIndex(of: 0x0A) {
+            lines.append(Data(pendingEvents[pendingEvents.startIndex..<newline]))
+            pendingEvents.removeSubrange(pendingEvents.startIndex...newline)
+        }
+        pendingLock.unlock()
+        let decoded = lines.compactMap(SyncEvent.decode)
+        guard !decoded.isEmpty else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            for event in decoded {
+                self.onEvent?(event)
+            }
         }
     }
 

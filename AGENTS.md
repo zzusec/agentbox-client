@@ -585,6 +585,12 @@ data/
   终端里的 agent 永远看不到代理变量。运行中的窗格改不了，只能新开窗口或重启 agent。
 - 端口映射按来源 IP 鉴权：只有属主用户自己的容器（和宿主机）能连映射端口。
 
+### 项目启动命令
+
+- 项目终端（`mode=agent`）的启动命令存在 `sync_projects.command`（schema 12）。空值 = 项目所用工具的默认命令：claude 为 `claude --dangerously-skip-permissions`，codex 为 `codex --yolo`（`projectLaunch` / `defaultLaunchCommand`）。创建/修改时与默认相同的命令一律存成空串，`custom_command` 才有意义，没改过的项目也会跟随将来的默认值。
+- 命令在 tmux 里以 `exec /bin/bash -c <单引号转义后的命令>` 运行，所以可以写环境变量赋值、`&&`、管道。它以 agent 用户身份在容器内执行，能开这个终端的人本来就能手敲同样的命令，所以校验只防生成脚本被拆开：≤1024 字节、合法 UTF-8、禁止换行与控制字符。`TestAgentTermCommandQuotesLaunchCommand` 用真实 shell 钉住引号不会逃逸。
+- tmux 会话仍按项目名命名，已运行的终端不受修改影响；退出 agent 后重新打开项目终端才用新命令。
+
 ### 项目同步（abox-sync）
 
 - 服务端只认项目（`sync_projects`，按空间隔离，租约串行写）；本地侧由 Mac 客户端随包分发的 `abox-sync` 轮询（`interval_seconds`，当前 1 秒）。服务端用 stat 走查签名缓存清单，`If-Revision` 命中直接回 204，客户端复用上次的远端清单——这是把轮询降到 1 秒的前提。
@@ -598,7 +604,11 @@ data/
 - **`PutFile` 不能把调用方的 reader 交给 net/http 托管**：请求体只要是 `io.ReadCloser`，transport 就会在发完请求后把它关掉；而 `applyPlan` 紧接着还要 `file.Close()`，第二次 close 直接报「file already closed」，**每一次上传都会失败**。`readerOnly()` 把 ReadCloser 包成纯 `io.Reader`，让 `NewRequest` 套 `io.NopCloser`，所有权留在调用方。`TestPutFileLeavesTheCallersReaderOpen` 钉死这条。
 - **路由里的查询串必须拆进 `URL.RawQuery`**：`Client.request` 收到的 route 形如 `…/file?path=x`，直接赋给 `URL.Path` 会把 `?` 转义成 `%3F`，查询串变成路径的一部分，服务端 `GET /api/sync/projects/{project}/file` 这条 pattern 就永远匹配不上——**所有文件读/写/删全部 404**。`request` 现在用 `url.Parse(route)` 拆开再拼。`TestFileRequestsCarryPathAsAQuery` 钉死。
 - `internal/syncclient/sync_e2e_test.go` 里有一个假服务端（manifest/lease/file 三组接口），能端到端跑完整生命周期：自举下载 → 本地改动上传 → 本地删除 → 服务器改动下发 → 强制策略覆盖。**上面两个 bug 都是它抓出来的**，改同步客户端时先跑它。
-- `Engine.Progress(done, total)` 每应用一个动作回调一次，`abox-sync` 按 25 条节流打印 `项目: 已完成/总数`；Mac 客户端靠这条把底部状态栏的转圈动起来（`MainViewController.handleSyncOutput` 用 `: \d+/\d+$` 判定进度行）。
+- **进度、逐文件事件与一致性结论**：`Engine.OnProgress` 按**字节**加权（一个大文件不会停在 0% 再跳到 100%，引擎内 120ms 节流，结尾固定 100%），`OnTransfer` 每完成一项回调一次并带耗时，`SyncResult.InSync` 表示本轮结束时两端已核对一致。`abox-sync -events` 把三者作为 JSON 行写到 **stdout**（`type` = `progress` / `transfer` / `status`），人读日志仍在 stderr；`status` 只在结论变化、有变更、出错或每 10 秒心跳时发出。Mac 客户端常驻 watcher 用 `-events`（`SyncManager.consumeEvents` 按行缓冲解码 → `MainViewController.handleSyncEvent`），一次性的「立即同步」仍走文本行 `项目: 已完成/总数 (百分比%)`（`handleSyncOutput`）。events 模式下不再打印文本进度行，否则底栏会被两路同时驱动。
+- **本地删除一律进回收站**：`ActionDeleteLocal` 不再 `os.RemoveAll`，而是移到 `<local_root>/.agentbox-sync/trash/<项目>/<UTC 时间戳>/<原路径>`（`.agentbox-sync` 本就被清单排除，救下来的文件不会被同步回去）。服务器上的文件被容器里的 agent 删掉时，这是用户唯一的另一份副本。
+- **批量删除熔断**（`guardBulkDelete`）：三路合并的一轮里，若某一侧要删除 ≥5 项且 ≥ 该侧现有条目的一半，整轮拒绝并报 `BulkDeleteError`（项目暂停，其他项目照常）。典型成因是 agent 在容器里 `rm -rf`，或本地文件夹被挪走。强制策略与建基线不受限（那是用户的明确选择）；确需放行用配置 `allow_bulk_delete`。服务器被清空后，「立即同步 ⟳ 从本地上传到服务器」就是恢复路径。
+- **下载按清单 SHA-256 校验**（`writeVerifiedFile`），不一致报 `DownloadMismatchError` 且不落盘。成因实例：服务端前面的 Cloudflare 开启了 Web Analytics 自动注入，给所有 `text/html` 响应追加 `<script>`；被改写的 HTML 落到本地后两边对不上，下一轮合并又把带脚本的文件推回服务器，连带覆盖/删除服务器上的新文件。服务端 `serveSyncFile` 因此一律回 `application/octet-stream` + `Cache-Control: private, no-store, no-transform`，**不要改回按扩展名给 Content-Type**。
+- 本地清单与服务端同理按 stat 签名缓存（`Engine.localManifest`，最长 1 分钟强制重算一次），否则 1 秒一轮的 watcher 每秒都要把整棵本地树重新哈希。
 - **`-dry-run` 是排查「文件为什么又回来了」的唯一手段**：`ProjectTarget.DryRun` 只算计划，
   不租约、不落盘、不写基线，`SyncResult.Planned` 带出明细（`conflict` / `delete_remote` /
   `delete_local` / `upload` / `download` + 路径）。对着线上配置跑一次就知道当下会做什么。
@@ -705,7 +715,7 @@ data/
 
 - `usage.Service` 是解析、定价和终端扫描的业务入口，不能反向依赖 server。Store.InsertUsage 仍一次事务写用量与扣额度，终端 UpsertTerminalUsage 绝不扣额度。
 - 新行 `PriceSnapshot` 包含来源、价格键、普通/长上下文档和阈值。终端 upsert 在同一事务读取首份快照，续写不能改用新价；旧行没有快照时不要伪造历史单价。Claude 0 费用按表补算时保存 table 来源。
-- 当前 SQLite schema=11（迁移明细见 docs/architecture/database-migrations.md），user_version 在迁移事务内更新；未知更高版本必须在建表/改 journal 前拒绝。版本 1 接收旧库，版本 2 加价格快照。回退由发布脚本检查目标二进制的配置、schema 与 compatibility_epoch；不兼容或缺少检查能力时须恢复兼容备份到新目录，不能手改 current。
+- 当前 SQLite schema=12（迁移明细见 docs/architecture/database-migrations.md），user_version 在迁移事务内更新；未知更高版本必须在建表/改 journal 前拒绝。版本 1 接收旧库，版本 2 加价格快照。回退由发布脚本检查目标二进制的配置、schema 与 compatibility_epoch；不兼容或缺少检查能力时须恢复兼容备份到新目录，不能手改 current。
 - `agent.Adapter` 提供能力、聊天/标题命令与事件解码，Event 统一 session ID、partial/output 标记及原始 JSON。server 按能力决定 app-server 优先/exec 回退，不在 Handler 内新增 provider 事件形状判断。
 - 协议样本放在 agent/usage 的 testdata，全部为合成脱敏数据。Linux 测试脚本必须复制这些 testdata；禁止读取真实用户 rollout 当测试夹具。
 

@@ -80,3 +80,31 @@ func TestSyncLeaseRejectsOtherDeviceUntilExpiry(t *testing.T) {
 		t.Fatal("new lease was not valid")
 	}
 }
+
+func TestSyncProjectCommandRoundTrips(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	projects, err := st.ReconcileSyncProjects("s1", "/ws", []string{"alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projects[0].Command != "" {
+		t.Fatalf("new project has a command: %+v", projects[0])
+	}
+	updated, err := st.SetSyncProjectCommand(projects[0].ID, "codex --yolo --search")
+	if err != nil || updated.Command != "codex --yolo --search" {
+		t.Fatalf("updated = %+v err=%v", updated, err)
+	}
+	again, err := st.ReconcileSyncProjects("s1", "/ws", []string{"alpha", "beta"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range again {
+		if p.Name == "alpha" && p.Command != "codex --yolo --search" {
+			t.Fatalf("reconcile dropped the command: %+v", p)
+		}
+	}
+}

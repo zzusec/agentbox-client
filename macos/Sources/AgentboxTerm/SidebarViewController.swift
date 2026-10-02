@@ -6,6 +6,8 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     var onChooseLocalRoot: (() -> Void)?
     var onCreateProject: (() -> Void)?
     var onRenameProject: ((RemoteProject) -> Void)?
+    /// "修改启动命令…": which tool the project terminal starts, and how.
+    var onEditProjectLaunch: ((RemoteProject) -> Void)?
     var onChangeProjectLocalDir: ((RemoteProject) -> Void)?
     var onChangeProjectPolicy: ((RemoteProject, String?) -> Void)?
     /// The ⟳ beside a sync mode: overwrite the other side immediately.
@@ -53,6 +55,11 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     @objc private func renameClicked() {
         guard let menuProject else { return }
         afterMenuCloses { [weak self] in self?.onRenameProject?(menuProject) }
+    }
+
+    @objc private func editLaunchClicked() {
+        guard let menuProject else { return }
+        afterMenuCloses { [weak self] in self?.onEditProjectLaunch?(menuProject) }
     }
 
     @objc private func changeLocalDirClicked() {
@@ -435,6 +442,10 @@ private final class ProjectCellView: NSTableCellView {
     func configure(_ project: RemoteProject, localPath: String) {
         name.stringValue = project.name
         path.stringValue = localPath
+        // Older servers do not report a command; say nothing rather than guess.
+        toolTip = project.command.isEmpty
+            ? localPath
+            : "\(localPath)\n启动：\(project.command)"
     }
 }
 
@@ -470,6 +481,7 @@ extension SidebarViewController: NSMenuDelegate {
         menu.addItem(item("复制路径", "doc.on.doc", #selector(copyPathClicked)))
         menu.addItem(.separator())
         menu.addItem(item("修改项目名称…", "pencil", #selector(renameClicked)))
+        menu.addItem(item("修改启动命令…", "terminal", #selector(editLaunchClicked)))
         menu.addItem(policyItem(for: project))
         menu.addItem(item("打开同步日志", "doc.text.magnifyingglass", #selector(openSyncLogClicked)))
         menu.addItem(.separator())

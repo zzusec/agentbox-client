@@ -17,11 +17,14 @@ import (
 // the host directory at that same absolute path, so a path printed in a
 // terminal is valid on both sides.
 type SyncProject struct {
-	ID        string    `json:"id"`
-	SessionID string    `json:"session_id"`
-	Name      string    `json:"name"`
-	Agent     string    `json:"agent"`
-	Path      string    `json:"path"`
+	ID        string `json:"id"`
+	SessionID string `json:"session_id"`
+	Name      string `json:"name"`
+	Agent     string `json:"agent"`
+	Path      string `json:"path"`
+	// Command is the project's own launch command; empty means the default
+	// for its agent (see server.projectLaunch).
+	Command   string    `json:"command"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -216,6 +219,20 @@ func (s *Store) SetSyncProjectAgent(id, agent string) (SyncProject, error) {
 	return project, nil
 }
 
+// SetSyncProjectCommand stores a project's launch command. Empty restores the
+// default for the project's agent.
+func (s *Store) SetSyncProjectCommand(id, command string) (SyncProject, error) {
+	if _, err := s.db.Exec(`UPDATE sync_projects SET command = ?, updated_at = ? WHERE id = ?`,
+		command, time.Now().Format(time.RFC3339Nano), id); err != nil {
+		return SyncProject{}, err
+	}
+	project, ok := s.SyncProject(id)
+	if !ok {
+		return SyncProject{}, sql.ErrNoRows
+	}
+	return project, nil
+}
+
 func (s *Store) DeleteSyncProject(id string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -231,12 +248,12 @@ func (s *Store) DeleteSyncProject(id string) error {
 	return tx.Commit()
 }
 
-const syncProjectCols = "id, session_id, name, agent, path, created_at, updated_at"
+const syncProjectCols = "id, session_id, name, agent, path, command, created_at, updated_at"
 
 func scanSyncProject(row interface{ Scan(...any) error }) (SyncProject, error) {
 	var p SyncProject
 	var created, updated string
-	if err := row.Scan(&p.ID, &p.SessionID, &p.Name, &p.Agent, &p.Path, &created, &updated); err != nil {
+	if err := row.Scan(&p.ID, &p.SessionID, &p.Name, &p.Agent, &p.Path, &p.Command, &created, &updated); err != nil {
 		return SyncProject{}, err
 	}
 	var err error

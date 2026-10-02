@@ -435,6 +435,151 @@ struct AppSmokeChecks {
         window.close()
     }
 
+    /// Launch command, typed local directory, sync events and the status bar:
+    /// the parts of the window that report what sync is doing.
+    @MainActor
+    static func launchAndSyncEventChecks() {
+        // Older servers send no launch fields; current ones do.
+        let legacy = try! JSONDecoder().decode(
+            RemoteProject.self,
+            from: Data(#"{"id":"p","name":"n","path":"/w/n"}"#.utf8)
+        )
+        precondition(legacy.command.isEmpty && legacy.agent.isEmpty && !legacy.customCommand)
+        let current = try! JSONDecoder().decode(
+            RemoteProject.self,
+            from: Data(#"{"id":"p","name":"n","path":"/w/n","agent":"codex","command":"codex --yolo","default_command":"codex --yolo","custom_command":false}"#.utf8)
+        )
+        precondition(current.agent == "codex" && current.command == "codex --yolo")
+        precondition(ProjectLaunch.defaultCommand(for: "claude") == "claude --dangerously-skip-permissions")
+        precondition(ProjectLaunch.defaultCommand(for: "codex") == "codex --yolo")
+
+        // New-project sheet on an instance that carries both tools.
+        let sheet = NewProjectViewController()
+        sheet.localRoot = "/tmp/agentbox-root"
+        sheet.availableAgents = ["claude", "codex"]
+        sheet.defaultAgent = "claude"
+        sheet.loadViewIfNeeded()
+        let all = views(in: sheet.view)
+        func field(_ id: NewProjectViewController.Field) -> NSView? {
+            all.first { $0.identifier?.rawValue == id.rawValue }
+        }
+        guard let nameField = field(.name) as? NSTextField,
+              let dirField = field(.localDir) as? NSTextField,
+              let agentPopup = field(.agent) as? NSPopUpButton,
+              let commandField = field(.command) as? NSTextField else {
+            preconditionFailure("new-project sheet is missing name, directory, tool or command")
+        }
+        func changed(_ field: NSTextField) {
+            sheet.controlTextDidChange(Notification(name: NSTextField.textDidChangeNotification, object: field))
+        }
+        func pick(_ index: Int) {
+            agentPopup.selectItem(at: index)
+            _ = agentPopup.target?.perform(agentPopup.action, with: agentPopup)
+        }
+        precondition(dirField.isEditable, "the local directory must accept typing")
+        precondition(agentPopup.isEnabled && agentPopup.numberOfItems == 2)
+        precondition(commandField.stringValue == "claude --dangerously-skip-permissions")
+
+        nameField.stringValue = "demo"
+        changed(nameField)
+        precondition(dirField.stringValue == "/tmp/agentbox-root/demo")
+        // Switching tools swaps an untouched default …
+        pick(1)
+        precondition(commandField.stringValue == "codex --yolo", "got \(commandField.stringValue)")
+        var draft = sheet.makeDraft()!
+        precondition(draft.agent == "codex" && draft.command == nil, "a default command is not an override")
+        // … but never a command the user typed.
+        commandField.stringValue = "codex --yolo --search"
+        pick(0)
+        precondition(commandField.stringValue == "codex --yolo --search", "a typed command must survive a tool switch")
+        draft = sheet.makeDraft()!
+        precondition(draft.agent == "claude" && draft.command == "codex --yolo --search")
+
+        // A typed directory expands ~ and becomes the override; typing the
+        // default back clears it; a relative path is refused.
+        dirField.stringValue = "~/code/demo"
+        changed(dirField)
+        precondition(sheet.customDir == NSHomeDirectory() + "/code/demo", "got \(String(describing: sheet.customDir))")
+        dirField.stringValue = "/tmp/agentbox-root/demo"
+        changed(dirField)
+        precondition(sheet.customDir == nil, "typing the default must clear the override")
+        dirField.stringValue = "relative/dir"
+        changed(dirField)
+        precondition(sheet.makeDraft() == nil, "a relative directory must be refused")
+
+        // The watcher's JSON lines decode; anything else is ignored.
+        let lines = [
+            #"{"type":"progress","project":"demo","phase":"download","path":"big.bin","index":1,"total":2,"bytes":512,"total_bytes":1024,"percent":50}"#,
+            #"{"type":"transfer","project":"demo","phase":"download","path":"big.bin","bytes":1024,"duration_ms":340}"#,
+            #"{"type":"status","project":"demo","in_sync":true,"applied":2,"duration_ms":420,"at":"2026-10-02T04:00:00Z"}"#,
+            #"{"type":"log","message":"ignored"}"#,
+        ]
+        let events = lines.compactMap { SyncEvent.decode(Data($0.utf8)) }
+        precondition(events.count == 3, "expected three events, got \(events.count)")
+
+        let client = AgentboxClient(server: URL(string: "https://agentbox-events.invalid")!, user: "u", token: "t")
+        let controller = MainViewController(client: client)
+        controller.loadViewIfNeeded()
+        controller.handleSyncEvent(events[0])
+        precondition(controller.isSyncing && controller.syncFraction == 0.5, "progress must drive the bar")
+        precondition(controller.syncStatusText.contains("big.bin") && controller.syncStatusText.contains("50%"))
+        controller.handleSyncEvent(events[1])
+        precondition(controller.syncStatusText.contains("big.bin") && controller.syncStatusText.contains("340ms"),
+                     "a transfer must say what moved and how long it took: \(controller.syncStatusText)")
+        controller.handleSyncEvent(events[2])
+        precondition(!controller.isSyncing, "a status settles the bar")
+        precondition(controller.syncStatusText.hasPrefix("✓ demo：同步了 2 个变更"), "got \(controller.syncStatusText)")
+        precondition(controller.recentTransfers.count == 1)
+
+        func status(_ project: String, inSync: Bool, conflicts: [String]? = nil, error: String? = nil) -> SyncStatus {
+            SyncStatus(project: project, inSync: inSync, applied: 0, conflicts: conflicts, error: error,
+                       durationMS: 10, at: "2026-10-02T04:00:00Z")
+        }
+        let agree = MainViewController.aggregateState(statuses: ["a": status("a", inSync: true)], active: [:])
+        precondition(agree?.text == "两端一致")
+        let two = MainViewController.aggregateState(
+            statuses: ["a": status("a", inSync: true), "b": status("b", inSync: true)], active: [:]
+        )
+        precondition(two?.text == "两端一致（2 个项目）")
+        let conflict = MainViewController.aggregateState(
+            statuses: ["a": status("a", inSync: true), "b": status("b", inSync: false, conflicts: ["x.go"], error: "冲突")],
+            active: [:]
+        )
+        precondition(conflict?.text == "有冲突，已暂停")
+        let failed = MainViewController.aggregateState(
+            statuses: ["a": status("a", inSync: false, error: "疑似误删，已暂停同步")], active: [:]
+        )
+        precondition(failed?.text == "未同步")
+        precondition(MainViewController.aggregateState(statuses: [:], active: [:]) == nil)
+
+        // A dropped file's upload reports a percentage, then size and time.
+        func note(_ state: UploadProgressNote.State) -> Notification {
+            Notification(name: UploadProgressNote.name, object: nil,
+                         userInfo: ["file": "a.zip", "project": "demo", "state": state])
+        }
+        controller.handleUploadNote(note(.running(fraction: 0.25)))
+        precondition(controller.isSyncing && controller.syncFraction == 0.25 && controller.syncStatusText.contains("25%"))
+        controller.handleUploadNote(note(.finished(bytes: 2048, milliseconds: 1500)))
+        precondition(!controller.isSyncing && controller.syncStatusText.contains("1.5s"), "got \(controller.syncStatusText)")
+
+        // Double-clicking the title bar zooms; a click in the content does not count.
+        let blank = NSViewController()
+        blank.view = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+        let window = MainWindow(contentViewController: blank)
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.titlebarAppearsTransparent = true
+        window.setContentSize(NSSize(width: 800, height: 500))
+        func click(_ y: CGFloat) -> NSEvent {
+            NSEvent.mouseEvent(
+                with: .leftMouseDown, location: NSPoint(x: 400, y: y), modifierFlags: [],
+                timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                eventNumber: 0, clickCount: 2, pressure: 1
+            )!
+        }
+        precondition(window.isTitleBarClick(click(window.frame.height - 6)), "the title bar strip must count")
+        precondition(!window.isTitleBarClick(click(100)), "the content area must not count")
+    }
+
     /// Per-project sync settings: the store keeps directory and policy keyed
     /// by project ID, the new-project sheet exposes all three fields, and the
     /// sidebar's right-click menu reaches the same two actions.
@@ -638,6 +783,7 @@ struct AppSmokeChecks {
         themeChecks()
         settingsSheetChecks()
         try await projectSettingsChecks()
+        launchAndSyncEventChecks()
         try await mouseEventsChecks()
         precondition(URLProtocol.registerClass(AppHTTPFixture.self))
         let client = AgentboxClient(server: URL(string: "https://agentbox-app-fixture.invalid")!, user: "synthetic-app-user", token: "synthetic-app-token")

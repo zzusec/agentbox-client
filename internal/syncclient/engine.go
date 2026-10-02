@@ -2,6 +2,8 @@ package syncclient
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,17 +21,66 @@ type Engine struct {
 	DeviceID   string
 	DeviceName string
 
-	// Progress, when set, is called after each action is applied so callers can
-	// show a moving bar instead of waiting for the whole tree to land. It is
-	// only ever called from inside SyncProject, so the caller can rebind it per
-	// project without any locking.
-	Progress func(done, total int)
+	// OnProgress ticks while a plan is applied, with a byte-weighted
+	// percentage so one large file moves the bar smoothly instead of sitting
+	// at 0% and jumping to 100%. OnTransfer fires once per finished item with
+	// how long it took. Both are only called from inside SyncProject, on the
+	// caller's goroutine, so the caller can rebind them per project.
+	OnProgress func(Progress)
+	OnTransfer func(Transfer)
+
+	// AllowBulkDelete disables the guard that stops a merge pass from wiping
+	// out most of one side. Off by default: the usual cause of a mass
+	// deletion is an agent that ran `rm -rf`, not a user who meant it.
+	AllowBulkDelete bool
 
 	// lastRemote caches each project's last synced (filtered) remote
 	// manifest, keyed by project ID. Together with the server's
 	// If-Revision support it turns idle poll cycles into tiny 204 probes.
 	mu         sync.Mutex
 	lastRemote map[string]Manifest
+	// localCache is the local mirror of the server's stat-signature cache:
+	// hashing every local file once a second is the dominant cost of an idle
+	// watcher on a big project.
+	localCache map[string]localCacheEntry
+}
+
+// localCacheMaxAge forces a full re-hash now and then even when the stat
+// signature is unchanged, so an edit that kept both size and mtime (some
+// editors and `touch -r` do) still syncs within a minute.
+const localCacheMaxAge = time.Minute
+
+type localCacheEntry struct {
+	signature string
+	manifest  Manifest
+	at        time.Time
+}
+
+// localManifest returns the project's local manifest, reusing the previous
+// hash pass while the tree's stat signature is unchanged.
+func (e *Engine) localManifest(dir string) (Manifest, error) {
+	signature, err := QuickLocalRevision(dir)
+	if err != nil {
+		return Manifest{}, err
+	}
+	e.mu.Lock()
+	cached, ok := e.localCache[dir]
+	e.mu.Unlock()
+	if ok && signature != "" && cached.signature == signature &&
+		time.Since(cached.at) < localCacheMaxAge {
+		return cached.manifest, nil
+	}
+	manifest, err := localManifest(dir)
+	if err != nil {
+		return Manifest{}, err
+	}
+	e.mu.Lock()
+	if e.localCache == nil {
+		e.localCache = map[string]localCacheEntry{}
+	}
+	e.localCache[dir] = localCacheEntry{signature: signature, manifest: manifest, at: time.Now()}
+	e.mu.Unlock()
+	return manifest, nil
 }
 
 func (e *Engine) cachedRemote(projectID string) Manifest {
@@ -53,6 +104,18 @@ type SyncResult struct {
 	Conflicts []string
 	// Planned is the human-readable plan, filled in only for a dry run.
 	Planned []string
+
+	Uploaded      int
+	Downloaded    int
+	DeletedLocal  int
+	DeletedRemote int
+	Bytes         int64
+	// InSync reports that the pass ended with both sides verified identical:
+	// either nothing differed, or the post-transfer manifests matched.
+	InSync bool
+	// TrashDir is where this pass parked locally deleted files, if any.
+	TrashDir string
+	Duration time.Duration
 }
 
 type InitialConflictError struct {
@@ -104,6 +167,16 @@ type ProjectTarget struct {
 }
 
 func (e *Engine) SyncProject(ctx context.Context, target ProjectTarget) (SyncResult, error) {
+	started := time.Now()
+	result, err := e.syncProject(ctx, target)
+	result.Duration = time.Since(started)
+	if result.Project == "" {
+		result.Project = target.Project.Name
+	}
+	return result, err
+}
+
+func (e *Engine) syncProject(ctx context.Context, target ProjectTarget) (SyncResult, error) {
 	project := target.Project
 	if e.Client == nil {
 		return SyncResult{}, errors.New("sync client is nil")
@@ -144,7 +217,7 @@ func (e *Engine) SyncProject(ctx context.Context, target ProjectTarget) (SyncRes
 		}
 		remote.ServerRevision = rawRevision
 	}
-	local, err := localManifest(localProject)
+	local, err := e.localManifest(localProject)
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -173,7 +246,7 @@ func (e *Engine) SyncProject(ctx context.Context, target ProjectTarget) (SyncRes
 			return SyncResult{}, err
 		}
 		e.rememberRemote(project.ID, remote)
-		return SyncResult{Project: project.Name}, nil
+		return SyncResult{Project: project.Name, InSync: true}, nil
 	}
 
 	lease, err := e.Client.AcquireLease(ctx, project.ID, e.DeviceID, e.DeviceName, 5*time.Minute)
@@ -214,13 +287,25 @@ func (e *Engine) SyncProject(ctx context.Context, target ProjectTarget) (SyncRes
 			return SyncResult{}, err
 		}
 		e.rememberRemote(project.ID, remote)
-		return SyncResult{Project: project.Name}, nil
+		return SyncResult{Project: project.Name, InSync: true}, nil
 	}
-	if err := e.applyPlan(ctx, project.ID, lease, localProject, plan); err != nil {
-		return SyncResult{}, err
+	// Only a three-way merge is guarded. A forced pass and a bootstrap are
+	// the user's explicit answer to "which side wins?", not an accident.
+	if target.ForcePolicy == "" && hasBase && !e.AllowBulkDelete {
+		if err := guardBulkDelete(
+			project.Name, plan, len(local.Entries), len(remote.Entries),
+		); err != nil {
+			return SyncResult{Project: project.Name}, err
+		}
+	}
+	result, err := e.applyPlan(ctx, project, target.StateRoot, lease, localProject, plan)
+	result.Project = project.Name
+	result.Actions = len(plan.Actions)
+	if err != nil {
+		return result, err
 	}
 
-	finalLocal, err := localManifest(localProject)
+	finalLocal, err := e.localManifest(localProject)
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -239,13 +324,14 @@ func (e *Engine) SyncProject(ctx context.Context, target ProjectTarget) (SyncRes
 	finalRemote.ServerRevision = finalRawRevision
 	verify := BuildPlan(Entries(finalLocal), Entries(finalLocal), Entries(finalRemote))
 	if len(verify.Conflicts) != 0 || len(verify.Actions) != 0 {
-		return SyncResult{}, errors.New("同步完成后本地和服务器仍不一致")
+		return result, errors.New("同步完成后本地和服务器仍不一致")
 	}
 	if err := saveBase(target.StateRoot, project.ID, localProject, finalRemote); err != nil {
-		return SyncResult{}, err
+		return result, err
 	}
 	e.rememberRemote(project.ID, finalRemote)
-	return SyncResult{Project: project.Name, Actions: len(plan.Actions)}, nil
+	result.InSync = true
+	return result, nil
 }
 
 // describePlan renders a plan for a dry run: what would be deleted, uploaded
@@ -348,84 +434,145 @@ func manifestsEqual(left, right map[string]Entry) bool {
 
 func (e *Engine) applyPlan(
 	ctx context.Context,
-	projectID string,
+	project Project,
+	stateRoot string,
 	lease Lease,
 	localProject string,
 	plan Plan,
-) error {
-	total := len(plan.Actions)
+) (SyncResult, error) {
+	var result SyncResult
+	progress := newReporter(e.OnProgress, project.Name, plan)
+	trashDir := trashRoot(stateRoot, project.Name, time.Now())
+
 	for index, action := range plan.Actions {
 		target, err := safeProjectPath(localProject, action.Entry.Path)
 		if err != nil {
-			return err
+			return result, err
 		}
+		phase := phaseFor(action.Type)
+		progress.begin(index+1, phase, action.Entry.Path)
+		started := time.Now()
+		var moved int64
+
 		switch action.Type {
 		case ActionUpload:
-			switch action.Entry.Kind {
-			case "dir":
-				if err := e.Client.PutFile(
-					ctx, projectID, lease.LeaseID, lease.DeviceID, action.Entry, nil,
-				); err != nil {
-					return err
-				}
-			case "file":
-				file, err := os.Open(target)
-				if err != nil {
-					return err
-				}
-				err = e.Client.PutFile(
-					ctx, projectID, lease.LeaseID, lease.DeviceID, action.Entry, file,
-				)
-				closeErr := file.Close()
-				if err != nil {
-					return err
-				}
-				if closeErr != nil {
-					return closeErr
-				}
-			default:
-				return fmt.Errorf("live sync does not support %s: %s", action.Entry.Kind, action.Entry.Path)
-			}
+			moved, err = e.upload(ctx, project.ID, lease, action.Entry, target, progress)
+			result.Uploaded++
 		case ActionDeleteRemote:
-			if err := e.Client.DeleteFile(
-				ctx, projectID, lease.LeaseID, lease.DeviceID, action.Entry.Path,
-			); err != nil {
-				return err
-			}
+			err = e.Client.DeleteFile(ctx, project.ID, lease.LeaseID, lease.DeviceID, action.Entry.Path)
+			result.DeletedRemote++
 		case ActionDownload:
-			switch action.Entry.Kind {
-			case "dir":
-				if err := os.MkdirAll(target, os.FileMode(action.Entry.Mode)); err != nil {
-					return err
-				}
-			case "file":
-				body, err := e.Client.OpenFile(ctx, projectID, action.Entry.Path)
-				if err != nil {
-					return err
-				}
-				err = writeLocalFile(target, body, os.FileMode(action.Entry.Mode), action.Entry.MTime)
-				closeErr := body.Close()
-				if err != nil {
-					return err
-				}
-				if closeErr != nil {
-					return closeErr
-				}
-			default:
-				return fmt.Errorf("live sync does not support %s: %s", action.Entry.Kind, action.Entry.Path)
-			}
+			moved, err = e.download(ctx, project.ID, action.Entry, target, progress)
+			result.Downloaded++
 		case ActionDeleteLocal:
-			if err := os.RemoveAll(target); err != nil {
-				return err
-			}
+			// Never os.RemoveAll: the server copy may have been deleted by an
+			// agent in the container, and this is the user's only other copy.
+			// The trash sits under .agentbox-sync, which the manifest walker
+			// excludes, so rescued files never sync themselves back.
+			err = moveToTrash(target, filepath.Join(trashDir, filepath.FromSlash(action.Entry.Path)))
+			result.DeletedLocal++
+			result.TrashDir = trashDir
 		default:
-			return fmt.Errorf("unknown sync action %q", action.Type)
+			err = fmt.Errorf("unknown sync action %q", action.Type)
 		}
-		if e.Progress != nil {
-			e.Progress(index+1, total)
+		if err != nil {
+			return result, err
+		}
+		result.Bytes += moved
+		if e.OnTransfer != nil {
+			e.OnTransfer(Transfer{
+				Project:    project.Name,
+				Phase:      phase,
+				Path:       action.Entry.Path,
+				Bytes:      moved,
+				DurationMS: time.Since(started).Milliseconds(),
+			})
 		}
 	}
-	return nil
+	progress.finish()
+	return result, nil
+}
+
+func (e *Engine) upload(
+	ctx context.Context,
+	projectID string,
+	lease Lease,
+	entry Entry,
+	target string,
+	progress *reporter,
+) (int64, error) {
+	switch entry.Kind {
+	case "dir":
+		return 0, e.Client.PutFile(ctx, projectID, lease.LeaseID, lease.DeviceID, entry, nil)
+	case "file":
+		file, err := os.Open(target)
+		if err != nil {
+			return 0, err
+		}
+		var sent int64
+		body := &countingReader{inner: file, count: func(n int64) {
+			sent += n
+			progress.advance(n)
+		}}
+		err = e.Client.PutFile(ctx, projectID, lease.LeaseID, lease.DeviceID, entry, body)
+		closeErr := file.Close()
+		if err != nil {
+			return sent, err
+		}
+		return sent, closeErr
+	default:
+		return 0, fmt.Errorf("live sync does not support %s: %s", entry.Kind, entry.Path)
+	}
+}
+
+func (e *Engine) download(
+	ctx context.Context,
+	projectID string,
+	entry Entry,
+	target string,
+	progress *reporter,
+) (int64, error) {
+	switch entry.Kind {
+	case "dir":
+		return 0, os.MkdirAll(target, os.FileMode(entry.Mode))
+	case "file":
+		body, err := e.Client.OpenFile(ctx, projectID, entry.Path)
+		if err != nil {
+			return 0, err
+		}
+		var got int64
+		counted := &countingReader{inner: body, count: func(n int64) {
+			got += n
+			progress.advance(n)
+		}}
+		err = writeVerifiedFile(target, entry.SHA256, counted, os.FileMode(entry.Mode), entry.MTime)
+		closeErr := body.Close()
+		var mismatch *DownloadMismatchError
+		if errors.As(err, &mismatch) {
+			mismatch.Path = entry.Path
+		}
+		if err != nil {
+			return got, err
+		}
+		return got, closeErr
+	default:
+		return 0, fmt.Errorf("live sync does not support %s: %s", entry.Kind, entry.Path)
+	}
+}
+
+func phaseFor(kind ActionType) string {
+	switch kind {
+	case ActionUpload:
+		return PhaseUpload
+	case ActionDownload:
+		return PhaseDownload
+	case ActionDeleteLocal:
+		return PhaseDeleteLocal
+	case ActionDeleteRemote:
+		return PhaseDeleteRemote
+	default:
+		return string(kind)
+	}
 }
 
 func localManifest(root string) (Manifest, error) {
@@ -494,7 +641,29 @@ func safeProjectPath(root, rel string) (string, error) {
 	return target, nil
 }
 
+// DownloadMismatchError means the bytes that arrived are not the bytes the
+// manifest promised. The usual culprit is a proxy rewriting the response —
+// Cloudflare's analytics auto-injection appends a <script> to anything served
+// as text/html — and accepting it would make the local copy differ from the
+// server, after which a merge pass pushes the tampered file back up.
+type DownloadMismatchError struct {
+	Path string
+	Want string
+	Got  string
+}
+
+func (e *DownloadMismatchError) Error() string {
+	return fmt.Sprintf("下载的 %s 与服务器清单的校验和不一致（可能被中间代理改写），已拒绝写入", e.Path)
+}
+
 func writeLocalFile(target string, body io.Reader, mode os.FileMode, modified string) error {
+	return writeVerifiedFile(target, "", body, mode, modified)
+}
+
+// writeVerifiedFile writes body to target atomically. With a non-empty
+// wantSHA256 the content is hashed on the way to disk and the rename only
+// happens when it matches, so a tampered download never replaces a good file.
+func writeVerifiedFile(target, wantSHA256 string, body io.Reader, mode os.FileMode, modified string) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
@@ -504,9 +673,15 @@ func writeLocalFile(target string, body io.Reader, mode os.FileMode, modified st
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	if _, err := io.Copy(tmp, body); err != nil {
+	hash := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(tmp, hash), body); err != nil {
 		tmp.Close()
 		return err
+	}
+	if got := hex.EncodeToString(hash.Sum(nil)); wantSHA256 != "" && got != wantSHA256 {
+		tmp.Close()
+		rel := filepath.Base(target)
+		return &DownloadMismatchError{Path: rel, Want: wantSHA256, Got: got}
 	}
 	if err := tmp.Chmod(mode.Perm()); err != nil {
 		tmp.Close()

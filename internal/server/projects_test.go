@@ -71,3 +71,78 @@ func TestProjectLifecycleRegistryAndTrash(t *testing.T) {
 		t.Fatalf("trash entries=%v err=%v", entries, err)
 	}
 }
+
+func TestProjectLaunchCommand(t *testing.T) {
+	s, sess := newTestServer(t)
+	sess.Agent = "claude"
+	sess.ClaudeAccountID = "claude-1"
+	sess.CodexAccountID = "codex-1"
+
+	create := func(body string) (int, projectView) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		s.handleProjectCreate(rec, accessRequest(sess.User, http.MethodPost, "/projects", body), sess)
+		var view projectView
+		_ = json.Unmarshal(rec.Body.Bytes(), &view)
+		return rec.Code, view
+	}
+	update := func(id, body string) (int, projectView) {
+		t.Helper()
+		req := accessRequest(sess.User, http.MethodPatch, "/projects/"+id, body)
+		req.SetPathValue("project", id)
+		rec := httptest.NewRecorder()
+		s.handleProjectRename(rec, req, sess)
+		var view projectView
+		_ = json.Unmarshal(rec.Body.Bytes(), &view)
+		return rec.Code, view
+	}
+
+	code, plain := create(`{"name":"plain"}`)
+	if code != http.StatusCreated || plain.Command != "claude --dangerously-skip-permissions" || plain.Custom {
+		t.Fatalf("plain = %d %+v", code, plain)
+	}
+	code, codex := create(`{"name":"codexy","agent":"codex"}`)
+	if code != http.StatusCreated || codex.Command != "codex --yolo" || codex.DefaultCommand != "codex --yolo" || codex.Custom {
+		t.Fatalf("codex = %d %+v", code, codex)
+	}
+	// Sending the default verbatim is stored as "follow the default".
+	code, explicit := create(`{"name":"explicit","agent":"codex","command":"codex --yolo"}`)
+	if code != http.StatusCreated || explicit.Custom {
+		t.Fatalf("explicit = %d %+v", code, explicit)
+	}
+	if row, _ := s.store.SyncProject(explicit.ID); row.Command != "" {
+		t.Fatalf("default stored verbatim: %+v", row)
+	}
+
+	// Command-only update: no name needed, nothing renamed.
+	code, custom := update(codex.ID, `{"command":"codex --model gpt-5.5 --yolo"}`)
+	if code != http.StatusOK || !custom.Custom || custom.Command != "codex --model gpt-5.5 --yolo" || custom.Name != "codexy" {
+		t.Fatalf("custom = %d %+v", code, custom)
+	}
+	// Switching agent keeps a custom command; clearing it restores the
+	// new agent's default.
+	code, switched := update(codex.ID, `{"agent":"claude","command":""}`)
+	if code != http.StatusOK || switched.Custom || switched.Command != "claude --dangerously-skip-permissions" {
+		t.Fatalf("switched = %d %+v", code, switched)
+	}
+	// Rename alone still works and keeps the launch settings.
+	code, renamed := update(custom.ID, `{"name":"codexy2"}`)
+	if code != http.StatusOK || renamed.Name != "codexy2" || renamed.Agent != "claude" {
+		t.Fatalf("renamed = %d %+v", code, renamed)
+	}
+
+	for _, body := range []string{
+		`{"name":"bad1","command":"claude\nrm -rf ~"}`,
+		`{"name":"bad2","command":"claude\u001b[2J"}`,
+	} {
+		if code, _ := create(body); code != http.StatusBadRequest {
+			t.Fatalf("create %s = %d, want 400", body, code)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(s.workspaceDir(sess), "bad1")); !os.IsNotExist(err) {
+		t.Fatalf("rejected project left a directory: %v", err)
+	}
+	if code, _ := update(plain.ID, `{}`); code != http.StatusBadRequest {
+		t.Fatalf("empty patch = %d, want 400", code)
+	}
+}

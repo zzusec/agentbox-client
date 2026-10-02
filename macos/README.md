@@ -37,6 +37,17 @@ The local root maps directly to the remote `/workspace`: remote project
 (or use the new-project sheet) to point it at its own directory instead, and to
 choose its sync mode.
 
+## Tool and launch command
+
+A project terminal starts the project's tool with a launch command. The
+new-project sheet offers the tools the instance has accounts for (Claude,
+Codex or both) and pre-fills the default command — `claude
+--dangerously-skip-permissions` or `codex --yolo`. Edit it freely (extra flags,
+env assignments, `&&`); clearing it restores the default. Switching tools
+replaces an untouched default but keeps a command you typed. Right-click a
+project → `修改启动命令…` changes both later; a terminal that is already
+running keeps its process, and reopening the project uses the new command.
+
 ## Per-project sync settings
 
 Both the new-project sheet and a project's right-click menu carry the same three
@@ -45,7 +56,10 @@ settings:
 - **项目名称 / name** — creating uses the name field; right-click offers
   `修改项目名称…`, which renames the server directory and the classic local
   folder together.
-- **本地工作空间 / local workspace** — `修改本地工作空间…` points one project at
+- **本地目录 / local directory** — in the new-project sheet the path can be
+  typed or pasted (`~` expands; a missing folder is created), picked with
+  `选择…`, or reset to the default with `默认`. Typing the default path back is
+  the same as no override. `修改本地工作空间…` points one project at
   any local directory. Overrides are keyed by project ID, so renaming a project
   keeps them. Picking the classic `<local root>/<name>` again clears the
   override.
@@ -85,9 +99,29 @@ The palette toolbar button opens the terminal settings sheet:
 
 ## Sync status bar
 
-The strip along the bottom of the window is where sync reports itself. It shows
-the engine's latest line and spins while a pass is in flight — a line ending in
-`done/total` is progress, anything else is a result. Sync needs a local
+The strip along the bottom of the window is where sync reports itself:
+
+- **Left** — whether both sides are identical right now: `两端一致` (green),
+  `同步中 42%` (blue), `有冲突，已暂停` (orange) or `未同步` (red, hover for the
+  reason). With several projects one that is not in sync is enough to say so.
+- **Middle** — a byte-weighted progress bar while files move, then the last
+  file with its direction, size and time, e.g. `↓ 下载 src/main.go · 1.2 MB ·
+  340ms`. Hovering lists the last 30 transfers. Files dropped on a terminal
+  report their upload percentage here too.
+- **Right** — when the two sides were last confirmed identical, and how long
+  that check took.
+
+The watcher runs `abox-sync -watch -events`, which writes structured JSON events
+on stdout; a one-shot ⟳ pass still reports `done/total (pct%)` text lines.
+
+Sync never deletes a local file outright. A file removed on the server (say,
+by an agent in the container) is moved to
+`<local root>/.agentbox-sync/trash/<project>/<timestamp>/`. A pass that would
+delete most of one side at once — an agent running `rm -rf`, a local folder that
+was moved away — is refused and the project pauses with `未同步`; ⟳ 从本地上传到服务器
+restores a wiped server from the Mac. Downloads are checked against the
+server's SHA-256, so a proxy that rewrites files in transit is caught instead
+of pushed back. Sync needs a local
 directory; without one the bar says so, and picking ⟳ on a sync mode offers to
 choose one instead of quietly doing nothing.
 
@@ -128,22 +162,22 @@ and currently points to `zzusec/agentbox-client`.
 Create a release artifact with:
 
 ```bash
-macos/scripts/release-app.sh 0.2.8
+macos/scripts/release-app.sh 0.2.9
 ```
 
 This produces:
 
 ```text
-macos/dist/agentbox-client-macos-arm64-v0.2.8.zip
-macos/dist/agentbox-client-macos-arm64-v0.2.8.zip.sha256
-macos/dist/agentbox-client-macos-arm64-v0.2.8.dmg
-macos/dist/agentbox-client-macos-arm64-v0.2.8.dmg.sha256
+macos/dist/agentbox-client-macos-arm64-v0.2.9.zip
+macos/dist/agentbox-client-macos-arm64-v0.2.9.zip.sha256
+macos/dist/agentbox-client-macos-arm64-v0.2.9.dmg
+macos/dist/agentbox-client-macos-arm64-v0.2.9.dmg.sha256
 ```
 
 The DMG includes an Applications shortcut for drag-to-install. The app is
 ad-hoc signed, not Developer ID signed or notarized.
 
-The GitHub release tag must be `v0.2.8` and the ZIP asset name must remain
+The GitHub release tag must be `v0.2.9` and the ZIP asset name must remain
 stable. Do not publish an update without the checksum file; the client refuses
 archives whose SHA-256 cannot be verified.
 

@@ -38,6 +38,9 @@ type config struct {
 	Projects        []string                  `json:"projects"`
 	ProjectSettings map[string]projectSetting `json:"project_settings,omitempty"`
 	IntervalSeconds int                       `json:"interval_seconds"`
+	// AllowBulkDelete lets a merge pass apply deletions that would empty most
+	// of one side. Leave it off: see syncclient.BulkDeleteError.
+	AllowBulkDelete bool `json:"allow_bulk_delete,omitempty"`
 }
 
 func main() {
@@ -48,6 +51,7 @@ func main() {
 	initialPolicy := flag.String("initial-policy", "", "initial side when both copies exist: local or server")
 	forcePolicy := flag.String("force-policy", "", "one pass that lets this side overwrite the other: local or server")
 	dryRun := flag.Bool("dry-run", false, "print what a pass would do, without touching anything")
+	events := flag.Bool("events", false, "write progress, transfer and status events as JSON lines on stdout")
 	flag.Parse()
 
 	// A forced policy is a deliberate, destructive one-shot. Refuse to combine
@@ -99,15 +103,17 @@ func main() {
 		fatal(err)
 	}
 	engine := &syncclient.Engine{
-		Client:     client,
-		DeviceID:   cfg.DeviceID,
-		DeviceName: cfg.DeviceName,
+		Client:          client,
+		DeviceID:        cfg.DeviceID,
+		DeviceName:      cfg.DeviceName,
+		AllowBulkDelete: cfg.AllowBulkDelete,
 	}
+	report := newReporter(*events)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if !*watch {
-		if err := syncOnce(ctx, client, engine, cfg, *forcePolicy, *dryRun); err != nil {
+		if err := syncOnce(ctx, client, engine, report, cfg, *forcePolicy, *dryRun); err != nil {
 			fatal(err)
 		}
 		return
@@ -115,7 +121,7 @@ func main() {
 	ticker := time.NewTicker(time.Duration(cfg.IntervalSeconds) * time.Second)
 	defer ticker.Stop()
 	for {
-		if err := syncOnce(ctx, client, engine, cfg, "", false); err != nil {
+		if err := syncOnce(ctx, client, engine, report, cfg, "", false); err != nil {
 			log.Print(err)
 		}
 		select {
@@ -130,6 +136,7 @@ func syncOnce(
 	ctx context.Context,
 	client *syncclient.Client,
 	engine *syncclient.Engine,
+	report *reporter,
 	cfg config,
 	forcePolicy string,
 	dryRun bool,
@@ -148,6 +155,7 @@ func syncOnce(
 			selected[name] = true
 		}
 	}
+	var firstErr error
 	for _, project := range projects {
 		if !selected[project.Name] {
 			continue
@@ -160,28 +168,26 @@ func syncOnce(
 			ForcePolicy:   forcePolicy,
 			DryRun:        dryRun,
 		}
-		// Report progress so the Mac client's status bar moves on a big tree.
-		// Throttled, but always emitting the final count. The percentage is
-		// carried in the line so both the CLI and the client bar can show it
-		// without recomputing (the client parses "done/total" anyway).
-		engine.Progress = func(done, total int) {
-			if done == total || done%25 == 0 {
-				pct := 0.0
-				if total > 0 {
-					pct = float64(done) / float64(total) * 100
-				}
-				log.Printf("%s: %d/%d (%.0f%%)", project.Name, done, total, pct)
-			}
-		}
+		engine.OnProgress = report.progress
+		engine.OnTransfer = report.transfer
 		result, err := engine.SyncProject(ctx, target)
-		engine.Progress = nil
+		engine.OnProgress, engine.OnTransfer = nil, nil
+		if !dryRun {
+			report.status(project, result, err)
+		}
 		if err != nil {
 			var conflicts *syncclient.ConflictError
 			if errors.As(err, &conflicts) {
 				log.Printf("%s: %s", project.Name, strings.Join(conflicts.Paths, ", "))
 				continue
 			}
-			return fmt.Errorf("%s: %w", project.Name, err)
+			// Keep going: one paused project (a guarded mass deletion, a
+			// tampered download) must not stop every other project syncing.
+			log.Printf("%s: %v", project.Name, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: %w", project.Name, err)
+			}
+			continue
 		}
 		if dryRun {
 			if len(result.Planned) == 0 && len(result.Conflicts) == 0 {
@@ -191,14 +197,18 @@ func syncOnce(
 				log.Printf("%s: %s", project.Name, line)
 			}
 		} else if result.Actions != 0 {
-			log.Printf("%s: 同步完成，应用了 %d 个变更", project.Name, result.Actions)
+			log.Printf("%s: 同步完成，应用了 %d 个变更，用时 %s", project.Name, result.Actions,
+				result.Duration.Round(time.Millisecond))
+			if result.TrashDir != "" {
+				log.Printf("%s: %d 个本地文件已移入回收站 %s", project.Name, result.DeletedLocal, result.TrashDir)
+			}
 		} else if forcePolicy != "" {
 			// A one-shot "sync now" always owes the user a verdict; the
 			// watcher stays quiet on idle passes so the log is not a wall.
 			log.Printf("%s: 已是最新，无需同步", project.Name)
 		}
 	}
-	return nil
+	return firstErr
 }
 
 // projectLocalDir resolves where a project syncs to. Without an override the

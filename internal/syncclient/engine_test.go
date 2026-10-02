@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -255,13 +255,15 @@ func TestResolvePlanWithoutAPolicyAsksForOne(t *testing.T) {
 	}
 }
 
-// Progress is what drives the client's progress bar, so it has to fire once
-// per applied action with a total the caller can divide by.
+// Progress is what drives the client's progress bar: it has to fire for every
+// action, end on a pinned 100%, and weigh files by size so one large upload
+// moves the bar instead of parking it at 0%. Transfers report each item once.
 func TestApplyPlanReportsProgress(t *testing.T) {
 	var puts, deletes int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPut:
+			_, _ = io.Copy(io.Discard, r.Body)
 			puts++
 		case http.MethodDelete:
 			deletes++
@@ -275,35 +277,59 @@ func TestApplyPlanReportsProgress(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello"), 0o644); err != nil {
+	big := strings.Repeat("x", 300<<10)
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte(big), 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	var progress []string
+	var progress []Progress
+	var transfers []Transfer
 	engine := &Engine{
-		Client:   client,
-		DeviceID: "device-1",
-		Progress: func(done, total int) {
-			progress = append(progress, fmt.Sprintf("%d/%d", done, total))
-		},
+		Client:     client,
+		DeviceID:   "device-1",
+		OnProgress: func(p Progress) { progress = append(progress, p) },
+		OnTransfer: func(tr Transfer) { transfers = append(transfers, tr) },
 	}
 	plan := Plan{Actions: []Action{
 		{Type: ActionUpload, Entry: Entry{Path: "sub", Kind: "dir", Mode: 0o755}},
-		{Type: ActionUpload, Entry: Entry{Path: "a.txt", Kind: "file", Mode: 0o644}},
+		{Type: ActionUpload, Entry: Entry{Path: "a.txt", Kind: "file", Mode: 0o644, Size: int64(len(big))}},
 		{Type: ActionDeleteRemote, Entry: Entry{Path: "gone.txt", Kind: "file"}},
 	}}
 	lease := Lease{LeaseID: "lease-1", DeviceID: "device-1"}
-	if err := engine.applyPlan(context.Background(), "p1", lease, dir, plan); err != nil {
+	result, err := engine.applyPlan(
+		context.Background(), Project{ID: "p1", Name: "demo"}, t.TempDir(), lease, dir, plan,
+	)
+	if err != nil {
 		t.Fatalf("applyPlan: %v", err)
-	}
-	if want := []string{"1/3", "2/3", "3/3"}; !reflect.DeepEqual(progress, want) {
-		t.Fatalf("progress = %v, want %v", progress, want)
 	}
 	if puts != 2 || deletes != 1 {
 		t.Fatalf("server saw %d puts and %d deletes, want 2 and 1", puts, deletes)
+	}
+	if result.Uploaded != 2 || result.DeletedRemote != 1 || result.Bytes != int64(len(big)) {
+		t.Fatalf("result = %+v", result)
+	}
+
+	var begins []string
+	for i, p := range progress {
+		if i > 0 && p.Percent < progress[i-1].Percent {
+			t.Fatalf("percent went backwards: %+v then %+v", progress[i-1], p)
+		}
+		if p.Phase != PhaseDone && (len(begins) == 0 || begins[len(begins)-1] != p.Path) {
+			begins = append(begins, p.Path)
+		}
+	}
+	if want := []string{"sub", "a.txt", "gone.txt"}; !reflect.DeepEqual(begins, want) {
+		t.Fatalf("progress paths = %v, want %v", begins, want)
+	}
+	last := progress[len(progress)-1]
+	if last.Phase != PhaseDone || last.Percent != 100 || last.Index != 3 || last.Total != 3 {
+		t.Fatalf("last progress = %+v", last)
+	}
+	if len(transfers) != 3 || transfers[1].Path != "a.txt" || transfers[1].Bytes != int64(len(big)) {
+		t.Fatalf("transfers = %+v", transfers)
 	}
 }
 

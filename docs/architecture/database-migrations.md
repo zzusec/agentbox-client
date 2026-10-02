@@ -16,6 +16,7 @@ SQLite 使用 `PRAGMA user_version` 记录 schema。迁移按 `internal/store/mi
 | 9 | usage_messages 按工作空间和 Claude 消息 ID 持久去重；与用量、额度同事务提交，不改历史费用 |
 | 10 | sync_projects / sync_leases：本地目录与服务端项目的双向同步注册表和租约 |
 | 11 | 实例可同时绑定 claude 与 codex 账号（claude_account_id / codex_account_id）、实例级必填出口代理（proxy_id）、按工具拆分的默认模型（default_model_claude / default_model_codex）、项目的开发工具（sync_projects.agent）与宿主绝对路径（sync_projects.path）；删除工作空间补齐同步与消息级联 |
+| 12 | sync_projects.command：项目终端的启动命令，空值表示所用工具的默认命令 |
 
 新增列全部为 `NOT NULL DEFAULT ''`，迁移是纯加法，旧二进制仍能读取未知列之外的字段。但 `runMigrations` 会因 `user_version` 高于支持值拒绝启动，所以**回退只能靠备份，不能原地降级**。
 

@@ -26,8 +26,8 @@ type Entry struct {
 }
 
 type Manifest struct {
-	ProjectID string  `json:"project_id"`
-	Revision  string  `json:"revision"`
+	ProjectID string `json:"project_id"`
+	Revision  string `json:"revision"`
 	// ServerRevision is the revision of the server's unfiltered manifest —
 	// the value the client echoes back with If-Revision for cheap polls.
 	// FilterManifest recomputes Revision over the filtered entries, so the
@@ -325,4 +325,61 @@ func excluded(rel string, isDir bool, patterns []string) bool {
 		}
 	}
 	return false
+}
+
+// QuickLocalRevision fingerprints a local project the same cheap way the
+// server does: names, sizes, modes and mtimes, no file contents. Comparing it
+// between passes is what lets the watcher skip hashing a tree that nobody
+// touched — and a sync pass hashes every file in the project.
+//
+// It deliberately mirrors BuildLocalManifest's exclude handling; a project
+// whose only changes are in node_modules must not look changed.
+func QuickLocalRevision(root string) (string, error) {
+	if _, err := os.Stat(root); os.IsNotExist(err) {
+		return "", nil
+	}
+	excludes, err := loadExcludes(root)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.New()
+	err = filepath.WalkDir(root, func(name string, item fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			return walkErr
+		}
+		if name == root {
+			return nil
+		}
+		rel, err := filepath.Rel(root, name)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if excluded(rel, item.IsDir(), excludes) {
+			if item.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		info, err := item.Info()
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		fmt.Fprintf(hash, "%s\x00%d\x00%d\x00%s\n",
+			rel, info.Size(), info.Mode(), info.ModTime().UTC().Format(time.RFC3339Nano))
+		return nil
+	})
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }

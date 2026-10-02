@@ -56,6 +56,12 @@ export interface Project {
   agent?: string;
   /** 服务器绝对路径（宿主机 = 容器内同一路径），不是 Mac 本机目录 */
   path: string;
+  /** 项目终端的启动命令（已填入默认值） */
+  command?: string;
+  /** 所用工具的默认启动命令 */
+  default_command?: string;
+  /** command 是否为项目自定义 */
+  custom_command?: boolean;
   created_at: string;
   updated_at: string;
 }

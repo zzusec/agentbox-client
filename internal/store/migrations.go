@@ -9,7 +9,7 @@ import (
 
 // SchemaVersion changes only with a committed, ordered migration. Versions
 // predating this framework use user_version=0, including partially upgraded DBs.
-const SchemaVersion = 11
+const SchemaVersion = 12
 
 //go:embed migrations/001_baseline.sql
 var baselineSQL string
@@ -71,6 +71,7 @@ func migrations() []migration {
 		{9, func(tx *sql.Tx) error { _, err := tx.Exec(usageMessagesSQL); return err }},
 		{10, func(tx *sql.Tx) error { _, err := tx.Exec(syncSQL); return err }},
 		{11, instanceMigrationV11},
+		{12, syncProjectCommandMigration},
 	}
 }
 
@@ -84,6 +85,24 @@ func migrations() []migration {
 // "restore the backup" rather than "undo a destructive rewrite". Rows are
 // backfilled at the server layer, which is the only place with access to both
 // the config (account types, proxies) and the data directory.
+// syncProjectCommandMigration lets each project carry its own launch command.
+// Empty means "the default command for the project's agent", so every row
+// that predates this version keeps launching what it launched before the
+// defaults changed only if the defaults say so.
+func syncProjectCommandMigration(tx *sql.Tx) error {
+	var found int
+	if err := tx.QueryRow(
+		"SELECT COUNT(*) FROM pragma_table_info('sync_projects') WHERE name='command'",
+	).Scan(&found); err != nil {
+		return err
+	}
+	if found != 0 {
+		return nil
+	}
+	_, err := tx.Exec("ALTER TABLE sync_projects ADD COLUMN command TEXT NOT NULL DEFAULT ''")
+	return err
+}
+
 func instanceMigrationV11(tx *sql.Tx) error {
 	for _, c := range []struct{ table, name, definition string }{
 		{"sessions", "claude_account_id", "TEXT NOT NULL DEFAULT ''"},

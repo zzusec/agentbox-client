@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"mime"
 	"net/http"
 	"os"
 	"path"
@@ -390,11 +389,15 @@ func (s *Server) serveSyncFile(w http.ResponseWriter, r *http.Request, root *saf
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if ctype := mime.TypeByExtension(path.Ext(rel)); ctype != "" {
-		w.Header().Set("Content-Type", ctype)
-	} else {
-		w.Header().Set("Content-Type", "application/octet-stream")
-	}
+	// Always opaque bytes, never the file's own type. A CDN in front of the
+	// server rewrites what it believes is a page — Cloudflare's analytics
+	// auto-injection appends a <script> to every text/html response — and a
+	// sync client that receives the rewritten file sees a local copy that no
+	// longer matches the server, which a later merge pass then pushes back up.
+	// no-transform asks every intermediary to leave the bytes alone as well.
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Cache-Control", "private, no-store, no-transform")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, filepath.Base(rel), info.ModTime(), file)
 }
 

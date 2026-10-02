@@ -204,6 +204,8 @@ Then open the same address in your local browser and sign in with **`boxadmin` a
 4. On the Projects homepage (`项目`), select New project (`新建项目`) and choose its workspace. Projects share that workspace's account, egress proxy, and container; each has a directory under `/workspace` and its own Agent terminal.
 5. Open a project to work in its Agent terminal. Space files (`空间文件`) can browse the entire workspace; Web chat, history, and Git review remain workspace-scoped and are accessed through the workspace shortcut. Local sync paths are managed by the Mac client, not the browser.
 
+   The project terminal starts the project's tool with a launch command. By default that is `claude --dangerously-skip-permissions` or `codex --yolo`, so the agent works without per-action approval prompts inside its container; a project can store its own command (the Mac client's new-project sheet and `修改启动命令…`, or `PATCH /api/sessions/{id}/projects/{project}` with `command`). An empty command restores the default.
+
 ### 6. Run as a service
 
 After stopping the foreground trial, run from the repository directory:

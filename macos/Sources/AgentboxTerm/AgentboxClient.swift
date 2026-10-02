@@ -38,11 +38,21 @@ final class AgentboxClient {
         return projects.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    func createProject(name: String, in workspace: Workspace) async throws -> RemoteProject {
+    /// Creates a project. A nil agent follows the instance default; a nil or
+    /// default command lets the server pick the agent's default command.
+    func createProject(
+        name: String,
+        agent: String? = nil,
+        command: String? = nil,
+        in workspace: Workspace
+    ) async throws -> RemoteProject {
         let url = Self.endpoint(server, "api/sessions/\(escaped(workspace.id))/projects")
         var request = authorizedRequest(url: url, method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["name": name])
+        var body: [String: String] = ["name": name]
+        if let agent { body["agent"] = agent }
+        if let command { body["command"] = command }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let data = try await Self.perform(request, token: token)
         return try JSONDecoder().decode(RemoteProject.self, from: data)
     }
@@ -61,6 +71,26 @@ final class AgentboxClient {
         return try JSONDecoder().decode(RemoteProject.self, from: data)
     }
 
+    /// Changes which tool a project terminal starts and with what command. An
+    /// empty command restores the default for the chosen tool. Terminals that
+    /// are already running keep their process; the next one uses the change.
+    func updateProjectLaunch(
+        _ project: RemoteProject,
+        agent: String,
+        command: String,
+        in workspace: Workspace
+    ) async throws -> RemoteProject {
+        let url = Self.endpoint(
+            server,
+            "api/sessions/\(escaped(workspace.id))/projects/\(escaped(project.id))"
+        )
+        var request = authorizedRequest(url: url, method: "PATCH")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["agent": agent, "command": command])
+        let data = try await Self.perform(request, token: token)
+        return try JSONDecoder().decode(RemoteProject.self, from: data)
+    }
+
     /// Server-side project deletion: the handler moves the workspace directory
     /// into a trash folder rather than unlinking it outright.
     func deleteProject(_ project: RemoteProject, in workspace: Workspace) async throws {
@@ -72,7 +102,14 @@ final class AgentboxClient {
         _ = try await Self.perform(request, token: token)
     }
 
-    func upload(file: URL, workspace: Workspace, project: String) async throws -> String? {
+    /// Uploads one file into a project. onProgress receives 0...1 as the body
+    /// goes out, on a background queue.
+    func upload(
+        file: URL,
+        workspace: Workspace,
+        project: String,
+        onProgress: ((Double) -> Void)? = nil
+    ) async throws -> String? {
         let boundary = "Agentbox-\(UUID().uuidString)"
         let multipart = try MultipartFile(file: file, boundary: boundary)
         defer { multipart.remove() }
@@ -87,7 +124,12 @@ final class AgentboxClient {
         }
         var request = authorizedRequest(url: url, method: "POST")
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        let (data, response) = try await URLSession.shared.upload(for: request, fromFile: multipart.url)
+        let delegate = onProgress.map { UploadProgressDelegate(onProgress: $0) }
+        let (data, response) = try await URLSession.shared.upload(
+            for: request,
+            fromFile: multipart.url,
+            delegate: delegate
+        )
         try Self.validate(response: response, data: data, accepted: 200..<300)
         let result = try JSONDecoder().decode(UploadResponse.self, from: data)
         return result.containerPath
@@ -197,5 +239,26 @@ private final class MultipartFile {
         name.replacingOccurrences(of: "\"", with: "")
             .replacingOccurrences(of: "\r", with: "")
             .replacingOccurrences(of: "\n", with: "")
+    }
+}
+
+/// Reports how much of an upload body has been sent. A task delegate rather
+/// than a session delegate, so the shared session needs no configuration.
+private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate {
+    private let onProgress: (Double) -> Void
+
+    init(onProgress: @escaping (Double) -> Void) {
+        self.onProgress = onProgress
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didSendBodyData bytesSent: Int64,
+        totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        guard totalBytesExpectedToSend > 0 else { return }
+        onProgress(min(1, Double(totalBytesSent) / Double(totalBytesExpectedToSend)))
     }
 }

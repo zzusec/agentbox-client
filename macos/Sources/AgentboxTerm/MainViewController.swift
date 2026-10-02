@@ -27,6 +27,26 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     /// 0...1 when the engine is reporting counts, nil when it is not.
     private(set) var syncFraction: Double?
 
+    /// Left end of the bar: are both sides identical right now?
+    private let syncStateDot = NSView()
+    private let syncStateLabel = NSTextField(labelWithString: "")
+    /// Right end of the bar: when that answer was last confirmed.
+    private let syncCheckedLabel = NSTextField(labelWithString: "")
+    /// The latest verdict per project, from the watcher's status events.
+    private(set) var projectSyncStatus: [String: SyncStatus] = [:]
+    /// Projects with a transfer in flight, and how far along.
+    private var activeTransfers: [String: SyncProgress] = [:]
+    /// Most recent transfers first, shown as the bar's tooltip.
+    private(set) var recentTransfers: [String] = []
+    /// The newest transfer, for the summary line once a pass settles.
+    private var lastTransferLine: String?
+    private var uploadObserver: NSObjectProtocol?
+    private static let clockFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
+
     init(client: AgentboxClient) {
         self.client = client
         super.init(nibName: nil, bundle: nil)
@@ -104,10 +124,30 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         syncStatusLabel.textColor = NativeTheme.secondaryText
         syncStatusLabel.lineBreakMode = .byTruncatingMiddle
         syncStatusLabel.translatesAutoresizingMaskIntoConstraints = false
+        syncStatusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        syncStatusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        let content = NSStackView(views: [syncSpinner, syncBar, syncStatusLabel])
+        syncStateDot.wantsLayer = true
+        syncStateDot.layer?.cornerRadius = 4
+        syncStateDot.isHidden = true
+        syncStateDot.translatesAutoresizingMaskIntoConstraints = false
+        syncStateLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        syncStateLabel.textColor = NativeTheme.primaryText
+        syncStateLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        syncStateLabel.isHidden = true
+        syncCheckedLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        syncCheckedLabel.textColor = NativeTheme.secondaryText
+        syncCheckedLabel.alignment = .right
+        syncCheckedLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        syncCheckedLabel.isHidden = true
+
+        let content = NSStackView(views: [
+            syncStateDot, syncStateLabel, syncSpinner, syncBar, syncStatusLabel, syncCheckedLabel,
+        ])
         content.orientation = .horizontal
         content.spacing = 8
+        content.setCustomSpacing(5, after: syncStateDot)
+        content.setCustomSpacing(12, after: syncStateLabel)
         content.translatesAutoresizingMaskIntoConstraints = false
 
         statusBar.addSubview(separator)
@@ -118,8 +158,10 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             separator.trailingAnchor.constraint(equalTo: statusBar.trailingAnchor),
             separator.heightAnchor.constraint(equalToConstant: 1),
             content.leadingAnchor.constraint(equalTo: statusBar.leadingAnchor, constant: 12),
-            content.trailingAnchor.constraint(lessThanOrEqualTo: statusBar.trailingAnchor, constant: -12),
+            content.trailingAnchor.constraint(equalTo: statusBar.trailingAnchor, constant: -12),
             content.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
+            syncStateDot.widthAnchor.constraint(equalToConstant: 8),
+            syncStateDot.heightAnchor.constraint(equalToConstant: 8),
             syncSpinner.widthAnchor.constraint(equalToConstant: 14),
             syncSpinner.heightAnchor.constraint(equalToConstant: 14),
             syncBar.widthAnchor.constraint(equalToConstant: 130),
@@ -136,7 +178,9 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     func showSyncStatus(_ message: String, busy: Bool = false, progress: Double? = nil) {
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
         syncStatusLabel.stringValue = text
-        syncStatusLabel.toolTip = text.isEmpty ? nil : "\(text)\n日志：\(SyncManager.logURL.path)"
+        if recentTransfers.isEmpty {
+            syncStatusLabel.toolTip = text.isEmpty ? nil : "\(text)\n日志：\(SyncManager.logURL.path)"
+        }
         syncStatusText = text
         isSyncing = busy
         syncFraction = progress
@@ -175,6 +219,163 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         showSyncStatus(settled ? "✓ \(text)" : text, busy: false)
     }
 
+    /// Routes one structured event from the watcher. Progress drives the bar,
+    /// a transfer becomes the "what just moved, how long it took" line, and a
+    /// status settles the in-sync indicator.
+    func handleSyncEvent(_ event: SyncEvent) {
+        switch event {
+        case let .progress(progress):
+            if progress.phase == "done" {
+                activeTransfers.removeValue(forKey: progress.project)
+            } else {
+                activeTransfers[progress.project] = progress
+                let path = progress.path.map { " \($0)" } ?? ""
+                let percent = Int(progress.percent.rounded())
+                showSyncStatus(
+                    "\(SyncEvent.phaseLabel(progress.phase))\(path) — \(progress.index)/\(progress.total) · \(percent)%",
+                    busy: true,
+                    progress: progress.percent / 100
+                )
+            }
+            refreshSyncIndicator()
+        case let .transfer(transfer):
+            let line = Self.describe(transfer)
+            lastTransferLine = line
+            recentTransfers.insert("\(Self.clockFormatter.string(from: Date()))  \(transfer.project)  \(line)", at: 0)
+            if recentTransfers.count > 30 {
+                recentTransfers.removeLast(recentTransfers.count - 30)
+            }
+            // Keep the bar moving if more of the plan is still to come.
+            let inFlight = activeTransfers[transfer.project]
+            showSyncStatus(line, busy: inFlight != nil, progress: inFlight.map { $0.percent / 100 })
+            refreshTransferTooltip()
+        case let .status(status):
+            projectSyncStatus[status.project] = status
+            activeTransfers.removeValue(forKey: status.project)
+            if status.applied > 0, status.inSync {
+                let took = SyncFormat.duration(milliseconds: status.durationMS)
+                let last = lastTransferLine.map { "  ·  最近：\($0)" } ?? ""
+                showSyncStatus("✓ \(status.project)：同步了 \(status.applied) 个变更，用时 \(took)\(last)", busy: false)
+            } else if let error = status.error, !error.isEmpty {
+                showSyncStatus("\(status.project)：\(error)", busy: false)
+            } else if isSyncing {
+                // Settled with nothing applied: stop the spinner, keep the text.
+                showSyncStatus(syncStatusText, busy: false)
+            }
+            syncCheckedLabel.stringValue = "核对于 \(Self.clockFormatter.string(from: Date())) · \(SyncFormat.duration(milliseconds: status.durationMS))"
+            syncCheckedLabel.isHidden = false
+            refreshSyncIndicator()
+            refreshTransferTooltip()
+        }
+    }
+
+    /// A file dropped on a terminal: a percentage while it goes up, then its
+    /// size and how long it took, in the same bar as sync.
+    func handleUploadNote(_ note: Notification) {
+        guard let decoded = UploadProgressNote.decode(note) else { return }
+        let file = decoded.file
+        let project = decoded.project
+        switch decoded.state {
+        case let .running(fraction):
+            let percent = Int((fraction * 100).rounded())
+            showSyncStatus("↑ 上传 \(file) 到 \(project) — \(percent)%", busy: true, progress: fraction)
+        case let .finished(bytes, milliseconds):
+            var parts = ["↑ 上传 \(file)"]
+            if bytes > 0 { parts.append(SyncFormat.bytes(bytes)) }
+            parts.append(SyncFormat.duration(milliseconds: milliseconds))
+            let line = parts.joined(separator: " · ")
+            recentTransfers.insert("\(Self.clockFormatter.string(from: Date()))  \(project)  \(line)", at: 0)
+            showSyncStatus("✓ \(line)", busy: false)
+            refreshTransferTooltip()
+        case let .failed(message):
+            showSyncStatus("上传失败：\(file)：\(message)", busy: false)
+        }
+    }
+
+    /// "↓ 下载 src/main.go · 1.2 MB · 340ms"
+    static func describe(_ transfer: SyncTransfer) -> String {
+        var parts = ["\(SyncEvent.phaseLabel(transfer.phase)) \(transfer.path)"]
+        if transfer.bytes > 0 {
+            parts.append(SyncFormat.bytes(transfer.bytes))
+        }
+        parts.append(SyncFormat.duration(milliseconds: transfer.durationMS))
+        return parts.joined(separator: " · ")
+    }
+
+    /// Folds every project's latest verdict into the dot and its label: one
+    /// project that is not in sync is enough to say so.
+    private func refreshSyncIndicator() {
+        let state = Self.aggregateState(statuses: projectSyncStatus, active: activeTransfers)
+        syncStateDot.isHidden = state == nil
+        syncStateLabel.isHidden = state == nil
+        guard let state else { return }
+        syncStateDot.layer?.backgroundColor = state.color.cgColor
+        syncStateLabel.stringValue = state.text
+        syncStateLabel.toolTip = state.detail
+        syncStateDot.toolTip = state.detail
+    }
+
+    struct SyncIndicator {
+        let text: String
+        let detail: String
+        let color: NSColor
+    }
+
+    /// Pure so the smoke checks can pin the wording without a running engine.
+    static func aggregateState(
+        statuses: [String: SyncStatus],
+        active: [String: SyncProgress]
+    ) -> SyncIndicator? {
+        if let first = active.sorted(by: { $0.key < $1.key }).first {
+            let name = first.key
+            let progress = first.value
+            let percent = Int(progress.percent.rounded())
+            return SyncIndicator(
+                text: "同步中 \(percent)%",
+                detail: "\(name)：\(progress.index)/\(progress.total) 项，\(SyncFormat.bytes(progress.bytes)) / \(SyncFormat.bytes(progress.totalBytes))",
+                color: .systemBlue
+            )
+        }
+        guard !statuses.isEmpty else { return nil }
+        let sorted = statuses.values.sorted { $0.project < $1.project }
+        if let failed = sorted.first(where: { ($0.error ?? "").isEmpty == false && ($0.conflicts ?? []).isEmpty }) {
+            return SyncIndicator(text: "未同步", detail: "\(failed.project)：\(failed.error ?? "")", color: .systemRed)
+        }
+        if let conflicted = sorted.first(where: { ($0.conflicts ?? []).isEmpty == false }) {
+            let paths = (conflicted.conflicts ?? []).prefix(5).joined(separator: "、")
+            return SyncIndicator(
+                text: "有冲突，已暂停",
+                detail: "\(conflicted.project) 两端都改了：\(paths)",
+                color: .systemOrange
+            )
+        }
+        if sorted.allSatisfy(\.inSync) {
+            let names = sorted.map(\.project).joined(separator: "、")
+            return SyncIndicator(
+                text: sorted.count > 1 ? "两端一致（\(sorted.count) 个项目）" : "两端一致",
+                detail: "本地与服务器文件完全一致：\(names)",
+                color: .systemGreen
+            )
+        }
+        return SyncIndicator(text: "等待同步", detail: "有项目尚未完成核对", color: .systemGray)
+    }
+
+    private func refreshTransferTooltip() {
+        guard !recentTransfers.isEmpty else { return }
+        let log = "日志：\(SyncManager.logURL.path)"
+        syncStatusLabel.toolTip = "最近同步的文件：\n" + recentTransfers.joined(separator: "\n") + "\n\n" + log
+    }
+
+    /// Clears per-workspace sync state when switching instances or stopping.
+    private func resetSyncIndicator() {
+        projectSyncStatus.removeAll()
+        activeTransfers.removeAll()
+        recentTransfers.removeAll()
+        lastTransferLine = nil
+        syncCheckedLabel.isHidden = true
+        refreshSyncIndicator()
+    }
+
     /// Pulls "done/total" out of an engine progress line.
     private func parseSyncCounts(_ text: String) -> (done: Int, total: Int)? {
         let pattern = #": (\d+)/(\d+)"#
@@ -207,6 +408,16 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         }
         sidebar.onRenameProject = { [weak self] project in
             self?.renameProject(project)
+        }
+        sidebar.onEditProjectLaunch = { [weak self] project in
+            self?.editProjectLaunch(project)
+        }
+        uploadObserver = NotificationCenter.default.addObserver(
+            forName: UploadProgressNote.name,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            self?.handleUploadNote(note)
         }
         sidebar.onChangeProjectLocalDir = { [weak self] project in
             self?.changeProjectLocalDir(project)
@@ -272,6 +483,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         self.workspace = workspace
         syncManager?.stop()
         syncManager = nil
+        resetSyncIndicator()
         sidebar.setWorkspaceID(workspace.id)
         let root = UserDefaults.standard.string(forKey: localRootKey(workspace))
         sidebar.setLocalRoot(root)
@@ -356,11 +568,27 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         guard let workspace else { return }
         let sheet = NewProjectViewController()
         sheet.localRoot = UserDefaults.standard.string(forKey: localRootKey(workspace))
+        let tools = workspace.tools
+        sheet.availableAgents = tools
+        sheet.defaultAgent = tools.contains(workspace.agent) ? workspace.agent : (tools.first ?? "claude")
         sheet.onCreate = { [weak self] draft in
             guard let self else { return }
             Task { @MainActor in
                 do {
-                    let created = try await self.client.createProject(name: draft.name, in: workspace)
+                    let created = try await self.client.createProject(
+                        name: draft.name,
+                        agent: draft.agent,
+                        command: draft.command,
+                        in: workspace
+                    )
+                    // A typed path that does not exist yet is created now, so
+                    // the folder is there to open before the first file syncs.
+                    if let dir = draft.localDir {
+                        try? FileManager.default.createDirectory(
+                            atPath: dir,
+                            withIntermediateDirectories: true
+                        )
+                    }
                     if draft.localDir != nil || draft.policy != nil {
                         self.updateProjectSetting(for: workspace, project: created) { setting in
                             setting.localDir = draft.localDir
@@ -369,9 +597,13 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
                     }
                     self.sidebar.setProjects(try await self.client.projects(in: workspace))
                     // A new project has no baseline, so the chosen policy is
-                    // what decides the very first sync.
+                    // what decides the very first sync. Sync needs a workspace
+                    // directory for its baseline even when this project lives
+                    // elsewhere; ask for one rather than silently not syncing.
                     if draft.localDir != nil || draft.policy != nil {
-                        self.restartSync(workspace)
+                        if self.requireLocalRoot(for: workspace, policy: draft.policy) != nil {
+                            self.restartSync(workspace)
+                        }
                     }
                 } catch {
                     let errorAlert = NSAlert()
@@ -383,6 +615,68 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             }
         }
         presentAsSheet(sheet)
+    }
+
+    /// Right-click "修改启动命令…": pick the tool and edit the command the
+    /// project terminal starts with. A terminal already running keeps its
+    /// process; closing it and opening the project again uses the change.
+    private func editProjectLaunch(_ project: RemoteProject) {
+        guard let workspace, workspace.id == self.workspace?.id else { return }
+        let tools = workspace.tools.isEmpty ? ["claude"] : workspace.tools
+        let currentAgent = project.agent.isEmpty
+            ? (tools.contains(workspace.agent) ? workspace.agent : tools[0])
+            : project.agent
+
+        let alert = NSAlert()
+        alert.messageText = "修改「\(project.name)」的启动命令"
+        alert.informativeText = "已打开的终端不受影响；关闭后重新打开项目终端生效。清空命令即恢复所选工具的默认命令。"
+        alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "取消")
+
+        let agentPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 26))
+        for tool in tools {
+            agentPopup.addItem(withTitle: ProjectLaunch.label(for: tool))
+            agentPopup.lastItem?.representedObject = tool
+        }
+        if let index = tools.firstIndex(of: currentAgent) {
+            agentPopup.selectItem(at: index)
+        }
+        agentPopup.isEnabled = tools.count > 1
+        let commandField = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
+        commandField.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        commandField.stringValue = project.command.isEmpty
+            ? ProjectLaunch.defaultCommand(for: currentAgent)
+            : project.command
+        commandField.placeholderString = ProjectLaunch.defaultCommand(for: currentAgent)
+        let stack = NSStackView(views: [agentPopup, commandField])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.frame = NSRect(x: 0, y: 0, width: 360, height: 60)
+        alert.accessoryView = stack
+        alert.window.initialFirstResponder = commandField
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let agent = (agentPopup.selectedItem?.representedObject as? String) ?? currentAgent
+        var command = commandField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Switching tools without touching the old tool's default command
+        // means "the new tool's default", not "run claude in a codex project".
+        if agent != currentAgent, command == ProjectLaunch.defaultCommand(for: currentAgent) {
+            command = ""
+        }
+        Task { @MainActor in
+            do {
+                let updated = try await client.updateProjectLaunch(project, agent: agent, command: command, in: workspace)
+                sidebar.setProjects(try await client.projects(in: workspace))
+                showSyncStatus("\(updated.name) 启动命令：\(updated.command.isEmpty ? ProjectLaunch.defaultCommand(for: agent) : updated.command)")
+            } catch {
+                let errorAlert = NSAlert()
+                errorAlert.messageText = "修改启动命令失败"
+                errorAlert.informativeText = error.localizedDescription
+                errorAlert.alertStyle = .warning
+                errorAlert.runModal()
+            }
+        }
     }
 
     /// Right-click rename: stop the sync engine, move the local folder, rename
@@ -586,6 +880,9 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         )
         manager.onStatus = { [weak self] message in
             self?.handleSyncOutput(message)
+        }
+        manager.onEvent = { [weak self] event in
+            self?.handleSyncEvent(event)
         }
         syncManager = manager
         manager.start()

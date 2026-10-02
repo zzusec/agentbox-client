@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"agentbox/internal/config"
 	"agentbox/internal/dockerx"
@@ -22,10 +24,16 @@ type projectView struct {
 	Name string `json:"name"`
 	// Agent is the tool this project is developed with. Empty means "inherit
 	// the instance default".
-	Agent     string    `json:"agent"`
-	Path      string    `json:"path"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Agent string `json:"agent"`
+	Path  string `json:"path"`
+	// Command is what the project terminal runs, with the default already
+	// filled in; Custom says whether it was set explicitly, and
+	// DefaultCommand is what an empty command falls back to for this agent.
+	Command        string    `json:"command"`
+	DefaultCommand string    `json:"default_command"`
+	Custom         bool      `json:"custom_command"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 func (s *Server) projectView(sess store.Session, project store.SyncProject) projectView {
@@ -35,10 +43,81 @@ func (s *Server) projectView(sess store.Session, project store.SyncProject) proj
 		// the client always sees an absolute, container-valid path.
 		path = filepath.Join(s.workspaceDir(sess), project.Name)
 	}
+	tool, command := projectLaunch(sess, project)
 	return projectView{
 		ID: project.ID, Name: project.Name, Agent: project.Agent, Path: path,
+		Command: command, DefaultCommand: defaultLaunchCommand(tool),
+		Custom:    strings.TrimSpace(project.Command) != "",
 		CreatedAt: project.CreatedAt, UpdatedAt: project.UpdatedAt,
 	}
+}
+
+// Default launch commands. A project terminal is meant to run unattended
+// next to a synced local checkout, so the agents start without per-action
+// approval prompts; the container (non-root, no-new-privileges, fixed mounts)
+// is the boundary. A project stores its own command to opt out.
+const (
+	defaultClaudeCommand = "claude --dangerously-skip-permissions"
+	defaultCodexCommand  = "codex --yolo"
+	maxLaunchCommand     = 1024
+)
+
+func defaultLaunchCommand(tool string) string {
+	if tool == config.AgentCodex {
+		return defaultCodexCommand
+	}
+	return defaultClaudeCommand
+}
+
+// projectLaunch resolves which tool a project terminal runs and the command
+// that starts it: the project's own agent and command when set, otherwise the
+// instance default tool with that tool's default command. A directory made
+// inside the container has no row yet and simply gets the defaults.
+func projectLaunch(sess store.Session, project store.SyncProject) (tool, command string) {
+	tool = project.Agent
+	if tool == "" {
+		tool = sess.Agent
+	}
+	if tool != config.AgentCodex {
+		tool = config.AgentClaude
+	}
+	command = strings.TrimSpace(project.Command)
+	if command == "" {
+		command = defaultLaunchCommand(tool)
+	}
+	return tool, command
+}
+
+// validLaunchCommand checks a launch command before it is stored.
+//
+// The command runs under bash in the instance container as the agent user,
+// which anyone who can open this project's terminal can already do by typing.
+// What the check protects is the generated tmux script: a newline or other
+// control character would end the quoted argument and run text outside it.
+func validLaunchCommand(command string) (string, error) {
+	command = strings.TrimSpace(command)
+	if len(command) > maxLaunchCommand {
+		return "", fmt.Errorf("启动命令不能超过 %d 字节", maxLaunchCommand)
+	}
+	if !utf8.ValidString(command) {
+		return "", errors.New("启动命令不是有效的 UTF-8")
+	}
+	for _, r := range command {
+		if unicode.IsControl(r) {
+			return "", errors.New("启动命令不能包含换行或控制字符")
+		}
+	}
+	return command, nil
+}
+
+// normalizeLaunchCommand stores the agent's own default as empty, so
+// "custom" means something and an untouched project follows future defaults.
+func normalizeLaunchCommand(sess store.Session, agent, command string) string {
+	tool, _ := projectLaunch(sess, store.SyncProject{Agent: agent})
+	if command == defaultLaunchCommand(tool) {
+		return ""
+	}
+	return command
 }
 
 func (s *Server) handleProjectList(w http.ResponseWriter, r *http.Request, sess store.Session) {
@@ -71,6 +150,9 @@ func (s *Server) handleProjectCreate(w http.ResponseWriter, r *http.Request, ses
 		// Agent pins the tool for this project. Omitted or empty means
 		// "whatever the instance defaults to".
 		Agent string `json:"agent"`
+		// Command overrides the launch command. Omitted, empty or equal to
+		// the agent's default means "use the default".
+		Command string `json:"command"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "请求体格式错误")
@@ -86,6 +168,14 @@ func (s *Server) handleProjectCreate(w http.ResponseWriter, r *http.Request, ses
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Checked before the directory exists, so a bad command cannot leave an
+	// unconfigured project behind.
+	command, err := validLaunchCommand(req.Command)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	command = normalizeLaunchCommand(sess, agent, command)
 	root, err := s.openDataDir(s.workspaceDir(sess))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -115,6 +205,12 @@ func (s *Server) handleProjectCreate(w http.ResponseWriter, r *http.Request, ses
 		if project.Name == name {
 			if agent != "" {
 				if project, err = s.store.SetSyncProjectAgent(project.ID, agent); err != nil {
+					writeErr(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+			}
+			if command != "" {
+				if project, err = s.store.SetSyncProjectCommand(project.ID, command); err != nil {
 					writeErr(w, http.StatusInternalServerError, err.Error())
 					return
 				}
@@ -154,20 +250,28 @@ func (s *Server) handleProjectRename(w http.ResponseWriter, r *http.Request, ses
 		return
 	}
 	var req struct {
+		// Name renames the project. It may be omitted (or repeat the current
+		// name) when the request only changes the agent or command.
 		Name string `json:"name"`
 		// Agent is optional; when absent the project keeps its current tool.
 		Agent *string `json:"agent"`
+		// Command is optional; empty restores the agent's default.
+		Command *string `json:"command"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "请求体格式错误")
 		return
 	}
-	name, ok := validFileName(req.Name)
-	if !ok || strings.HasPrefix(name, ".") {
-		writeErr(w, http.StatusBadRequest, "项目名称无效")
-		return
+	name := project.Name
+	if strings.TrimSpace(req.Name) != "" || (req.Agent == nil && req.Command == nil) {
+		var ok bool
+		name, ok = validFileName(req.Name)
+		if !ok || strings.HasPrefix(name, ".") {
+			writeErr(w, http.StatusBadRequest, "项目名称无效")
+			return
+		}
 	}
-	agent := ""
+	agent := project.Agent
 	if req.Agent != nil {
 		chosen, err := validProjectAgent(sess, *req.Agent)
 		if err != nil {
@@ -176,27 +280,48 @@ func (s *Server) handleProjectRename(w http.ResponseWriter, r *http.Request, ses
 		}
 		agent = chosen
 	}
-	root, err := s.openDataDir(s.workspaceDir(sess))
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	defer root.Close()
-	if err := root.RenameTo(project.Name, root, name, false); err != nil {
-		status := http.StatusInternalServerError
-		if os.IsExist(err) {
-			status = http.StatusConflict
+	command := project.Command
+	if req.Command != nil {
+		chosen, err := validLaunchCommand(*req.Command)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
 		}
-		writeErr(w, status, err.Error())
-		return
+		command = chosen
 	}
-	updated, err := s.store.RenameSyncProject(project.ID, name)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
+	command = normalizeLaunchCommand(sess, agent, command)
+
+	updated := project
+	if name != project.Name {
+		root, err := s.openDataDir(s.workspaceDir(sess))
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		err = root.RenameTo(project.Name, root, name, false)
+		root.Close()
+		if err != nil {
+			status := http.StatusInternalServerError
+			if os.IsExist(err) {
+				status = http.StatusConflict
+			}
+			writeErr(w, status, err.Error())
+			return
+		}
+		if updated, err = s.store.RenameSyncProject(project.ID, name); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
-	if req.Agent != nil {
+	var err error
+	if agent != updated.Agent {
 		if updated, err = s.store.SetSyncProjectAgent(updated.ID, agent); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if command != updated.Command {
+		if updated, err = s.store.SetSyncProjectCommand(updated.ID, command); err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}

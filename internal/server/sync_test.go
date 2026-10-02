@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -171,5 +172,29 @@ func TestSyncManifestIfRevisionAndCache(t *testing.T) {
 	second, _ := fetch(changedManifest.Revision)
 	if second.Code != http.StatusNoContent {
 		t.Fatalf("second not modified status = %d body=%s", second.Code, second.Body.String())
+	}
+}
+
+// A CDN that rewrites text/html (Cloudflare's analytics injection) corrupted
+// synced .html files. Sync downloads must be opaque and marked no-transform.
+func TestSyncFileDownloadIsOpaque(t *testing.T) {
+	s, sess := newTestServer(t)
+	project := syncTestProject(t, s, sess)
+	page := "<html><body>hi</body></html>"
+	if err := os.WriteFile(filepath.Join(s.workspaceDir(sess), "alpha", "index.html"), []byte(page), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	req := accessRequest(sess.User, http.MethodGet, "/file?path=index.html", "")
+	req.SetPathValue("project", project.ID)
+	rec := httptest.NewRecorder()
+	s.handleSyncFile(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.String() != page {
+		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/octet-stream" {
+		t.Fatalf("content-type = %q", got)
+	}
+	if got := rec.Header().Get("Cache-Control"); !strings.Contains(got, "no-transform") {
+		t.Fatalf("cache-control = %q", got)
 	}
 }

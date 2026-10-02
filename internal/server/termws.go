@@ -15,7 +15,6 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"agentbox/internal/config"
 	"agentbox/internal/store"
 )
 
@@ -90,13 +89,15 @@ func termCommand(env []string) string {
 // mounts that directory at the same absolute path, so the directory the agent
 // starts in is the path the user sees everywhere else — including on their own
 // machine, where abox-sync mirrors the project under the same name.
-func agentTermCommand(env []string, project, agentType, workspace string) string {
+//
+// command is the project's launch command (see projectLaunch). It runs under
+// `bash -c` rather than a bare exec so a stored command may use shell syntax —
+// an env assignment, `&&`, a pipe — without the caller quoting anything; bash
+// still execs a simple command in place, so the agent stays the foreground
+// process of its tmux session.
+func agentTermCommand(env []string, project, command, workspace string) string {
 	projectPath := filepath.Join(workspace, project)
-	program := "claude"
-	if agentType == config.AgentCodex {
-		program = "codex"
-	}
-	run := "cd " + shellQuote(projectPath) + " && exec " + program
+	run := "cd " + shellQuote(projectPath) + " && exec /bin/bash -c " + shellQuote(command)
 	cmd := "command -v tmux >/dev/null || { " + run + "; }\n"
 	if sync := tmuxEnvSync(env); sync != "" {
 		cmd += "{ " + sync + "} >/dev/null 2>&1\n"
@@ -254,6 +255,7 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request, sess store
 	//       rather than auto-reconnecting, so two tabs don't fight)
 	// Containers built from pre-tmux images fall back to a plain bash.
 	tool := sess.Agent
+	launch := ""
 	if termReq.mode == "agent" {
 		project, projectErr := s.projectByName(sess, termReq.project)
 		if projectErr != nil {
@@ -263,6 +265,7 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request, sess store
 		if project.Agent != "" {
 			tool = project.Agent
 		}
+		_, launch = projectLaunch(sess, project)
 	}
 	env, err := s.execEnvFor(sess, tool, termReq.project)
 	if err != nil {
@@ -275,7 +278,7 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request, sess store
 	command := termCommand(env)
 	workDir := s.containerWorkspace(r.Context(), sess)
 	if termReq.mode == "agent" {
-		command = agentTermCommand(env, termReq.project, tool, workDir)
+		command = agentTermCommand(env, termReq.project, launch, workDir)
 	}
 	pty, err := s.dock.ExecPTY(r.Context(), sess.ContainerID, []string{"/bin/bash", "-c", command}, env, workDir)
 	if err != nil {

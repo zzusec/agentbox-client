@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -10,7 +11,6 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"agentbox/internal/config"
 	"agentbox/internal/store"
 )
 
@@ -185,10 +185,11 @@ func TestParseTerminalRequest(t *testing.T) {
 
 func TestAgentTermCommandUsesProjectSession(t *testing.T) {
 	const workspace = "/srv/agentbox/data/users/alice/sessions/s1/workspace"
-	cmd := agentTermCommand([]string{envIntranetProxy + "=socks5h://x"}, "alpha", config.AgentClaude, workspace)
+	cmd := agentTermCommand([]string{envIntranetProxy + "=socks5h://x"}, "alpha", defaultClaudeCommand, workspace)
 	for _, want := range []string{
 		workspace + "/alpha",
-		"exec claude",
+		"exec /bin/bash -c",
+		"claude --dangerously-skip-permissions",
 		"new-session -A -D -s " + shellQuote(agentTmuxSession("alpha")),
 		"set-environment -g " + envIntranetProxy + " 'socks5h://x'; ",
 	} {
@@ -198,5 +199,24 @@ func TestAgentTermCommandUsesProjectSession(t *testing.T) {
 	}
 	if agentTmuxSession("alpha") == agentTmuxSession("beta") {
 		t.Fatal("different projects must not share a tmux session")
+	}
+}
+
+// TestAgentTermCommandQuotesLaunchCommand runs the generated tmux argument
+// through a real shell: a quote inside a stored command must reach bash as
+// data, not end the argument and run the rest as script.
+func TestAgentTermCommandQuotesLaunchCommand(t *testing.T) {
+	const workspace = "/srv/ws"
+	launch := `printf '%s|' "it's" FOO=1 && echo done`
+	cmd := agentTermCommand(nil, "alpha", launch, workspace)
+	marker := "-s " + shellQuote(agentTmuxSession("alpha")) + " "
+	run := cmd[strings.LastIndex(cmd, marker)+len(marker):]
+	out, err := exec.Command("/bin/sh", "-c", "printf '%s' "+run).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "cd '/srv/ws/alpha' && exec /bin/bash -c " + shellQuote(launch)
+	if string(out) != want {
+		t.Fatalf("tmux would run:\n%s\nwant:\n%s", out, want)
 	}
 }

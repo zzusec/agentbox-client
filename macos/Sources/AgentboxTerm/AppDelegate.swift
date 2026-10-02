@@ -80,6 +80,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
 
+        // A Window menu gives zoom, minimise and full screen their usual
+        // shortcuts and a place to find them besides the title bar.
+        let windowItem = NSMenuItem()
+        mainMenu.addItem(windowItem)
+        let windowMenu = NSMenu(title: "窗口")
+        windowItem.submenu = windowMenu
+        windowMenu.addItem(withTitle: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "缩放", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(.separator())
+        let fullScreen = windowMenu.addItem(
+            withTitle: "进入全屏幕",
+            action: #selector(NSWindow.toggleFullScreen(_:)),
+            keyEquivalent: "f"
+        )
+        fullScreen.keyEquivalentModifierMask = [.command, .control]
+        NSApp.windowsMenu = windowMenu
+
         NSApp.mainMenu = mainMenu
     }
 
@@ -111,8 +128,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let client = AgentboxClient(server: server, user: connection.user, token: connection.token)
         let content = MainViewController(client: client)
         mainContent = content
-        let window = NSWindow(contentViewController: content)
+        let window = MainWindow(contentViewController: content)
         window.title = "agentbox-client"
+        window.delegate = self
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
@@ -159,5 +177,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
         return true
+    }
+}
+
+extension AppDelegate: NSWindowDelegate {
+    /// Zoom fills the screen. Without this AppKit sizes the "standard" frame
+    /// from the content's fitting size, and this content (a split view laid
+    /// out by hand) has none, so zoom had nowhere to grow to.
+    func windowWillUseStandardFrame(_ window: NSWindow, defaultFrame newFrame: NSRect) -> NSRect {
+        window.screen?.visibleFrame ?? newFrame
     }
 }
