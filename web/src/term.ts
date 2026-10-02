@@ -1,11 +1,11 @@
 /* term：终端页 —— xterm 实例、PTY WebSocket（含自动重连）、连接状态与顶栏提示轮播、
- * 终端内粘贴图片上传。 */
+ * 终端内粘贴/拖入文件上传（落到工作区的 tmp/）。 */
 "use strict";
 
 import { S, bus } from "./state.js";
 import type { TerminalTips, UsageEvents, UsageTotals } from "./types.js";
 import { $, isMobile, openLightbox } from "./util.js";
-import { api, wsURL, imgURLFromPath, uploadAttachment } from "./api.js";
+import { api, wsURL, imgURLFromPath, uploadAttachment, uploadToTmp, TMP_DIR } from "./api.js";
 import { fmtUSD } from "./quota.js";
 import { refreshAll } from "./data.js";
 import { pastedImages } from "./chat.js";
@@ -17,7 +17,14 @@ const FitAddonClass = window.FitAddon && (window.FitAddon.FitAddon || window.Fit
 const WebglAddonClass = window.WebglAddon && (window.WebglAddon.WebglAddon || window.WebglAddon);
 
 const ENC = new TextEncoder();
-const IMG_PATH_RE = /\/shared\/\.images\/[A-Za-z0-9._-]+/g;
+/* 终端里可点击预览的图片路径：粘贴落在共享图片目录，拖入落在工作区的 tmp/。
+ * tmp/ 放的是用户任意文件，所以这一支必须按扩展名限成图片，否则点一个 pdf
+ * 路径会弹出一个加载不出来的图片灯箱。 */
+const IMG_PATH_RE = new RegExp(
+  "/shared/\\.images/[A-Za-z0-9._-]+"
+  + "|/workspace/" + TMP_DIR + "/[A-Za-z0-9._-]+\\.(?:png|jpe?g|gif|webp|bmp|svg)",
+  "gi",
+);
 
 // 复用同一个 xterm 实例跨重连能保留回滚，但也把上一个程序（如 claude）开启的 DEC
 // 私有模式一起带了过来：鼠标上报、备用屏、括号粘贴、焦点上报、应用光标键等。而服务端
@@ -575,23 +582,77 @@ export function termSpendPolling(on: boolean) {
   spendTimer = setInterval(() => void loadSpend(), SPEND_POLL_MS);
 }
 
-/* 终端粘贴图片：上传后把容器内路径写入 PTY（capture 阶段拦截，避免 xterm 处理）。
- * 上传期间整个终端页盖遮罩转圈，并通过 disableStdin 禁止键入，防止用户不知道发生了什么。 */
+/* 终端粘贴截图 / 拖入文件：上传后把容器内路径写入 PTY（粘贴在 capture 阶段拦截，
+ * 避免 xterm 处理）。上传期间整个终端页盖遮罩转圈，并通过 disableStdin 禁止键入，
+ * 防止用户不知道发生了什么。
+ * 两条路落点不同，刻意如此：粘贴的截图是临时产物，走共享附件目录由服务端生成唯一
+ * 文件名（剪贴板里的图片一律叫 image.png，落到同一个目录会互相覆盖，scrollback 里
+ * 早先那条路径会悄悄指向后来那张图），并跟着 48h 清理；拖入的是用户自己的文件，
+ * 保留原名落到工作区 tmp/，归用户自己管。 */
 const termUpload = { total: 0, done: 0 };
+let termDragOn = false;
 
 function termUploadUI() {
-  const on = termUpload.total > 0;
-  $("term-overlay").classList.toggle("hidden", !on);
-  if (on) {
+  const up = termUpload.total > 0;
+  const drag = termDragOn && !up;
+  const ov = $("term-overlay");
+  ov.classList.toggle("hidden", !up && !drag);
+  ov.classList.toggle("drop", drag);
+  if (up) {
     $("term-overlay-text").textContent = termUpload.total > 1
-      ? `图片上传中… (${termUpload.done + 1}/${termUpload.total})`
-      : "图片上传中…";
+      ? `上传中… (${termUpload.done + 1}/${termUpload.total})`
+      : "上传中…";
+  } else if (drag) {
+    $("term-overlay-text").textContent = "松开上传，路径写入终端";
   }
   if (S.term) {
-    S.term.options.disableStdin = on;
-    if (!on) refocusTerm(); // disableStdin 切过 readOnly，须刷新 IME 上下文
+    const was = !!S.term.options.disableStdin;
+    S.term.options.disableStdin = up;
+    if (was && !up) refocusTerm(); // disableStdin 切过 readOnly，须刷新 IME 上下文
   }
   syncTermKeys();
+}
+
+/* 往 PTY 里塞一段文本（当作用户输入）。 */
+function termType(text: string) {
+  if (S.termWS && S.termWS.readyState === WebSocket.OPEN) {
+    S.termWS.send(ENC.encode(text));
+  }
+}
+
+/* 上传一批文件并把容器内绝对路径写进 PTY。
+ * 用绝对路径而不是 tmp/xxx：终端的 cwd 不保证还在 /workspace，用户 cd 进子目录后
+ * 相对路径就指不到了。压缩包会被上传接口自动解压，这时没有单个文件路径，改送目录。 */
+function termAttach(files: File[], toTmp: boolean) {
+  if (!files.length || !S.current) return;
+  (async () => {
+    termUpload.total += files.length;
+    termUploadUI();
+    for (const f of files) {
+      try {
+        if (!toTmp) {
+          termType((await uploadAttachment(f)).path + " ");
+        } else {
+          const res = await uploadToTmp(f);
+          if (res.container_path) {
+            termType(res.container_path + " ");
+          } else {
+            // 压缩包被上传接口解开了，没有单个文件路径可送，改送落点目录
+            termType(`/workspace/${TMP_DIR}/ `);
+            if (S.term) {
+              S.term.write(`\r\n\x1b[33m${f.name} 已解压 ${res.files} 个文件到 ${TMP_DIR}/\x1b[0m\r\n`);
+            }
+          }
+        }
+      } catch (err) {
+        if (S.term) S.term.write(`\r\n\x1b[31m上传失败: ${(err as Error).message}\x1b[0m\r\n`);
+      }
+      termUpload.done++;
+      if (termUpload.done === termUpload.total) { termUpload.total = 0; termUpload.done = 0; }
+      termUploadUI();
+    }
+    refocusTerm();
+  })();
 }
 
 $("term-mount").addEventListener("paste", (e) => {
@@ -599,21 +660,66 @@ $("term-mount").addEventListener("paste", (e) => {
   if (!files.length || !S.current) return;
   e.preventDefault();
   e.stopPropagation();
-  (async () => {
-    termUpload.total += files.length;
-    termUploadUI();
-    for (const f of files) {
-      try {
-        const res = await uploadAttachment(f);
-        if (S.termWS && S.termWS.readyState === WebSocket.OPEN) {
-          S.termWS.send(ENC.encode(res.path + " "));
-        }
-      } catch (err) {
-        if (S.term) S.term.write(`\r\n\x1b[31m图片上传失败: ${(err as Error).message}\x1b[0m\r\n`);
-      }
-      termUpload.done++;
-      if (termUpload.done === termUpload.total) { termUpload.total = 0; termUpload.done = 0; }
-      termUploadUI();
-    }
-  })();
+  termAttach(files, false);
 }, true);
+
+/* 拖入文件。两件事不能省：
+ *  ① dragover 必须 preventDefault，否则浏览器会直接导航到被拖入的文件，
+ *     整个工作台连同 PTY 连接一起没了——拖歪一点就触发，没有任何提示；
+ *  ② 监听挂在 #tab-term 而不是 #term-mount。提示遮罩是 term-mount 的兄弟节点，
+ *     一出现指针就落到它上面，挂在 mount 上会立刻收到 dragleave，和自己打成
+ *     显示/隐藏的闪烁循环。遮罩那侧再配 pointer-events:none 做双保险。 */
+function dragHasFiles(dt: DataTransfer | null) {
+  return !!dt && dt.types.includes("Files");
+}
+
+/* 目录拖进来在 dataTransfer.files 里也是一个 File（size 0、没有 type），
+ * 上传只会在 tmp/ 里产出一个垃圾文件，所以用 webkitGetAsEntry 剔掉。 */
+function droppedFiles(dt: DataTransfer): File[] {
+  const out: File[] = [];
+  for (const it of [...dt.items]) {
+    if (it.kind !== "file") continue;
+    if (it.webkitGetAsEntry?.()?.isDirectory) continue;
+    const f = it.getAsFile();
+    if (f) out.push(f);
+  }
+  return out.length ? out : Array.from(dt.files);
+}
+
+function setTermDrag(on: boolean) {
+  if (termDragOn === on) return;
+  termDragOn = on;
+  termUploadUI();
+}
+
+for (const ev of ["dragenter", "dragover"] as const) {
+  $("tab-term").addEventListener(ev, (e) => {
+    if (!dragHasFiles(e.dataTransfer) || !S.current) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    setTermDrag(true);
+  });
+}
+
+$("tab-term").addEventListener("dragleave", (e) => {
+  const to = e.relatedTarget as Node | null;
+  if (!to || !$("tab-term").contains(to)) setTermDrag(false);
+});
+
+$("tab-term").addEventListener("drop", (e) => {
+  if (!dragHasFiles(e.dataTransfer) || !S.current) return;
+  e.preventDefault();
+  setTermDrag(false);
+  const files = droppedFiles(e.dataTransfer!);
+  // 只拖了目录时 files 是空的，不说一声用户会以为功能坏了
+  if (!files.length) {
+    if (S.term) S.term.write("\r\n\x1b[33m只能拖文件；目录请先打包成 zip\x1b[0m\r\n");
+    return;
+  }
+  termAttach(files, true);
+});
+
+/* 拖拽取消、或松手落在终端页之外时清掉提示：dragleave 不保证补齐这两种收尾。 */
+for (const ev of ["dragend", "drop"] as const) {
+  window.addEventListener(ev, () => setTermDrag(false));
+}

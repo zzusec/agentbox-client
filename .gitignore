@@ -19,6 +19,10 @@ config.json.bak*
 # 日志
 *.log
 
+# 终端拖入文件的落点 /workspace/tmp/（见 web/src/api.ts 的 uploadToTmp）：
+# 会话工作区根恰好是本仓库时，别让这些文件混进源码
+/tmp/
+
 # 浏览器调试产物
 /.playwright-cli/
 /output/

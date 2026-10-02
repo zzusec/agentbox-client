@@ -781,6 +781,10 @@ export interface UploadSummary {
   mode: string;
   /** archive 时是解出的文件数，file 时为 1 */
   files: number;
+  /** 相对上传根的路径，仅 mode==="file" 时下发 */
+  path?: string;
+  /** 容器内绝对路径（/workspace/… 或 /shared/…），仅 mode==="file" 时下发 */
+  container_path?: string;
 }
 
 /** POST /api/sessions/{id}/images 的上传结果。 */

@@ -4,7 +4,7 @@
 
 import { S, emit } from "./state.js";
 import type { FileScope } from "./state.js";
-import type { UploadResult } from "./types.js";
+import type { UploadResult, UploadSummary } from "./types.js";
 
 /* api 的返回类型由调用点用类型参数指定，例如 api<Session[]>("/sessions")。
  * 默认 unknown 而不是 any：忘了标注时，一用到返回值就会报错，逼着把接口形状
@@ -61,13 +61,18 @@ export function archiveDownloadURL() {
   return `/api/sessions/${S.current!.id}/archive?token=${encodeURIComponent(S.token)}${scopeQS()}`;
 }
 
-/* /shared/ 下任意文件（.images 图片、.file 附件）转成可访问的 URL。
+/* 容器内绝对路径转成可访问的 URL：/shared/ 下的附件（.images 图片、.file 附件）走
+ * shared 范围，/workspace/ 下的（终端拖入落在 tmp/ 的文件）走工作区范围——两个范围
+ * 在服务端是不同的根，scope 搞错了只会 404。
  * 这几个走会话资源的函数都只在有打开会话时才被调用（附件条、终端链接、
  * 上传按钮都挂在工作台里），故 S.current 直接断言非空。 */
 export function imgURLFromPath(containerPath: string) {
-  const rel = String(containerPath).replace(/^\/shared\//, "");
+  const p = String(containerPath);
+  const ws = "/workspace/";
+  const scope = p.startsWith(ws) ? "workspace" : "shared";
+  const rel = scope === "workspace" ? p.slice(ws.length) : p.replace(/^\/shared\//, "");
   return `/api/sessions/${S.current!.id}/file?path=${encodeURIComponent(rel)}` +
-    `&scope=shared&token=${encodeURIComponent(S.token)}`;
+    `&scope=${scope}&token=${encodeURIComponent(S.token)}`;
 }
 
 /* 上传附件（对话/终端粘贴图片、文件），落到共享目录，48h 后过期 */
@@ -76,4 +81,27 @@ export async function uploadAttachment(blob: File | Blob) {
   const fd = new FormData();
   fd.append("file", blob, (blob as File).name || "paste." + ext);
   return api<UploadResult>(`/sessions/${S.current!.id}/images`, { method: "POST", body: fd });
+}
+
+/* 终端拖入的临时文件落在工作区的 tmp/：仓库里已 gitignore，不会混进源代码。
+ * 与聊天附件分开——那套在 /shared 下、48h 自动清理，这套归用户自己管。
+ * 上传接口的 root.Sub() 只认已存在的目录，所以先建一次；已存在时报错是正常的，
+ * 吞掉让后面的上传去报真正的错（权限、超限等）。 */
+export const TMP_DIR = "tmp";
+
+export async function uploadToTmp(file: File) {
+  const id = S.current!.id;
+  try {
+    await api(`/sessions/${id}/files/mkdir`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: "workspace", dir: "", name: TMP_DIR }),
+    });
+  } catch (_) { /* 目录已存在 */ }
+  const fd = new FormData();
+  fd.append("file", file, file.name);
+  return api<UploadSummary>(
+    `/sessions/${id}/upload?path=${encodeURIComponent(TMP_DIR)}`,
+    { method: "POST", body: fd },
+  );
 }

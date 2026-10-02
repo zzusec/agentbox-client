@@ -121,6 +121,18 @@
 }
 .term-overlay-box .spin { width: 26px; height: 26px; border-width: 3px; }
 
+/* 拖入文件时的落点提示。遮罩绝不能吃掉指针事件：它一出现就盖在终端区上，
+   会让终端那侧立刻收到 dragleave，和自己打成显示/隐藏的闪烁循环。 */
+.term-overlay.drop {
+  pointer-events: none;
+  background: color-mix(in srgb, var(--term-bg) 70%, transparent);
+  cursor: copy;
+}
+.term-overlay.drop .term-overlay-box {
+  border: 2px dashed var(--amber);
+}
+.term-overlay.drop .spin { display: none; }
+
 /* 手机辅助键独立于终端滚动区；横滑查看更多，键盘开关始终留在右侧。 */
 .term-keys { display: none; }
 @media (max-width: 760px), (pointer: coarse) {
