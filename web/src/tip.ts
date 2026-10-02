@@ -219,7 +219,14 @@ document.addEventListener("focusin", (e) => {
 });
 document.addEventListener("focusout", (e) => { if (e.target === anchor) hide(); });
 
-addEventListener("scroll", () => hide(), { capture: true, passive: true });
+// Focusing a control scrolls it into view, and that scroll used to hide the
+// tip the focus had just opened — keyboard users saw it flash and vanish. A
+// tip that belongs to the focused control follows it instead.
+addEventListener("scroll", () => {
+  const focused = anchor && anchor === document.activeElement && anchor.matches(":focus-visible");
+  if (!focused) { hide(); return; }
+  requestAnimationFrame(() => { if (anchor && anchor.isConnected) show(anchor); });
+}, { capture: true, passive: true });
 addEventListener("resize", () => hide());
 addEventListener("blur", () => hide());
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") hide(); }, true);

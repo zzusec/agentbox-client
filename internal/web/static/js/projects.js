@@ -438,7 +438,7 @@ export function initProjects() {
     }, options);
     $("project-empty-configure").addEventListener("click", configure, options);
     $("project-configure").addEventListener("click", () => { dialog.close(); configure(); }, options);
-    for (const id of ["btn-new", "empty-new", "project-empty-create"]) {
+    for (const id of ["empty-new", "project-empty-create"]) {
         $(id).addEventListener("click", () => openCreate(), options);
     }
     $("project-refresh").addEventListener("click", () => { void load(); }, options);

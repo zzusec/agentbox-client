@@ -16,22 +16,21 @@
 .sidebar { width: 248px; border-right: 0; background: var(--panel); }
 /* 侧栏顶格与顶栏等高，由 --page-head-height 一处决定（原先这里写死 62px，
  * 于是桌面顶栏和侧栏顶格永远差一截）。 */
-.side-head { height: var(--page-head-height); padding: 0 20px; border: 0; justify-content: flex-end; }
+/* Compact sidebar: the head only holds the collapse control, so it does not
+   need the page-head height, and rows sit closer together. */
+.side-head { height: 48px; padding: 0 16px; border: 0; justify-content: flex-end; }
 .side-brand-name { white-space: nowrap; }
 .side-mark { width: 27px; height: 27px; }
-.side-create { padding: 8px 16px 18px; }
-.side-new { border-radius: 12px; color: var(--on-accent); background: var(--accent); border-color: var(--accent); justify-content: center; height: 42px; }
-.side-new:hover { color: var(--on-accent); background: var(--accent-hi); border-color: var(--accent-hi); }
-.console-nav { display: flex; flex-direction: column; gap: 5px; padding: 0 14px 22px; }
-.console-nav > .side-label { padding: 0 12px 8px; color: var(--muted); font-size: 11px; letter-spacing: 0; }
-.console-nav .side-item { color: var(--text); height: 44px; font-size: 14px; }
+.console-nav { display: flex; flex-direction: column; gap: 2px; padding: 0 14px 10px; }
+.console-nav > .side-label { padding: 0 12px 4px; color: var(--muted); font-size: 11px; letter-spacing: 0; }
+.console-nav .side-item { color: var(--text); height: 36px; font-size: 14px; }
 .side-item.active { box-shadow: none; }
 .sidebar .side-item { color: var(--text); border-radius: 22px; }
 .sidebar .side-item.active { color: var(--amber); background: color-mix(in srgb, var(--amber) 10%, var(--panel)); font-weight: 600; }
 .side-sessions { padding: 0 12px; }
-.side-section-head { padding-inline: 14px; }
+.side-section-head { padding-inline: 14px; height: 26px; }
 .side-label { letter-spacing: 0; }
-.session-card { border-radius: 10px; }
+.session-card { border-radius: 10px; height: 48px; }
 .session-card.active { box-shadow: none; }
 .sidebar-instance { flex: none; }
 .sidebar-instance > summary { list-style: none; cursor: pointer; }
@@ -40,18 +39,18 @@
 .sidebar-instance > summary > svg { flex: none; }
 .sidebar-instance-caret { margin-left: auto; color: var(--muted); }
 .sidebar-instance[open] > summary .sidebar-instance-caret { transform: rotate(90deg); }
-.sidebar-projects { margin: 2px 8px 12px 22px; padding-left: 10px; border-left: 1px solid var(--line); }
-.sidebar-project { width: 100%; min-height: 38px; gap: 9px; text-align: left; }
+.sidebar-projects { margin: 0 8px 6px 22px; padding-left: 10px; border-left: 1px solid var(--line); }
+.sidebar-project { width: 100%; min-height: 32px; gap: 9px; text-align: left; }
 .sidebar-project .side-item-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-project-message, .sidebar-project-retry { margin: 8px 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .sidebar-project-retry { border: 0; background: transparent; text-align: left; cursor: pointer; }
-.side-group-label { display: block; padding: 12px 12px 6px; color: var(--muted); font-weight: 600; }
+.side-group-label { display: block; padding: 8px 12px 4px; color: var(--muted); font-weight: 600; }
 .side-foot .side-nav { border: 0; padding: 0; }
 .side-foot .side-nav:has(#btn-settings.hidden) { display: none; }
 .sidebar-instance > summary { border: 0; background: transparent; }
 .sidebar-instance > summary:hover { background: var(--side-hover); }
 .sidebar-instance > summary.active { color: var(--amber); }
-.side-foot > .conn-latency { margin: 12px 12px 0; }
+.side-foot > .conn-latency { margin: 6px 12px 0; }
 @media (min-width: 761px) {
   :root[data-sidebar-collapsed="true"] .side-group-label,
   :root[data-sidebar-collapsed="true"] .sidebar-instance-caret { display: none; }
@@ -59,9 +58,9 @@
   :root[data-sidebar-collapsed="true"] .sidebar-project { justify-content: center; padding: 0; }
   :root[data-sidebar-collapsed="true"] .side-foot > .conn-latency { margin-inline: 0; }
 }
-.side-foot { padding: 8px 14px 16px; }
+.side-foot { padding: 4px 14px 10px; }
 .side-tools { flex-direction: column; align-items: stretch; }
-.side-tools .side-tool { width: 100%; height: 42px; justify-content: flex-start; padding-inline: 12px; }
+.side-tools .side-tool { width: 100%; height: 36px; justify-content: flex-start; padding-inline: 12px; }
 .side-tools .side-item-label { display: inline; }
 .side-tools .conn-latency { min-height: 28px; flex: none; padding-inline: 12px; }
 .main { padding: 12px 16px 16px 0; }

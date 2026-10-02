@@ -151,7 +151,8 @@ export async function smoke(page) {
     await firstInstance.locator('summary').click();
     await page.waitForFunction(() => document.querySelector('.sidebar-instance[data-session-id="fixture-space"]').open);
     assert.equal(await page.locator('#empty-new').innerText(), '新建项目');
-    assert.equal(await page.locator('#btn-new').innerText(), '新建项目');
+    // The sidebar no longer carries its own create button; the page header does.
+    assert.equal(await page.locator('#btn-new').count(), 0, 'sidebar create button must stay removed');
     assert.equal(await page.locator('#btn-settings').isVisible(), false);
     assert.equal(await page.locator('#btn-projects').getAttribute('aria-current'), 'page');
     assert.deepEqual(writes, [], 'home must not mutate resources');
