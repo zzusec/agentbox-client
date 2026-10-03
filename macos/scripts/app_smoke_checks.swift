@@ -944,6 +944,20 @@ struct AppSmokeChecks {
         controller.handleSyncEvent(progressEvent("other", 7))
         precondition(controller.syncStatusText.hasPrefix("focused ·"),
                      "the bar must stay on the project in front: \(controller.syncStatusText)")
+        // The indicator speaks for the project in front only: two projects in
+        // sync read as that one's state, not as a count of the workspace.
+        func statusEvent(_ project: String) -> SyncEvent {
+            SyncEvent.decode(Data(#"{"type":"status","project":"\#(project)","in_sync":true,"applied":0,"duration_ms":10,"at":"2026-10-03T00:00:00Z"}"#.utf8))!
+        }
+        controller.handleSyncEvent(statusEvent("focused"))
+        controller.handleSyncEvent(statusEvent("other"))
+        precondition(controller.syncIndicatorText == "两端一致",
+                     "the indicator must describe the focused project only: \(controller.syncIndicatorText)")
+        // Engine chatter that names no project stays out of a focused bar.
+        controller.handleSyncOutput("同步引擎：正在核对工作区")
+        precondition(controller.syncStatusText.hasPrefix("focused ·"),
+                     "workspace chatter must not take a focused bar: \(controller.syncStatusText)")
+
         // An engine log line naming another project goes to that project's
         // lane, not over the focused one — and a chunk that still carries a
         // newline is reduced to its last line, since the bar is one line high

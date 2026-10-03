@@ -75,7 +75,9 @@ final class SyncManager {
             self.process = process
             self.output = pipe
             self.events = eventPipe
-            emit("同步已启动：\(localRoot.path)")
+            // The log keeps it; the bar does not need to say a watcher started,
+            // least of all with the workspace root, which is no project's path.
+            appendToLog("同步已启动：\(localRoot.path)")
         } catch {
             emit("同步启动失败：\(error.localizedDescription)")
         }
@@ -87,7 +89,7 @@ final class SyncManager {
         events?.fileHandleForReading.readabilityHandler = nil
         events = nil
         if let process, process.isRunning {
-            emit("同步已停止")
+            appendToLog("同步已停止")
             process.terminate()
         }
         process = nil

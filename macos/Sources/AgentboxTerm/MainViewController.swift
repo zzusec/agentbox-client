@@ -42,6 +42,12 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     /// project sync looked like it had stopped. An upload is shown on top for
     /// its own duration and then hands the bar back to the engine.
     private var engineStatus = StatusLine()
+    /// Lines from the engine's log that name no project. Shown only while no
+    /// tab is in front: with one in front, they are about something else.
+    private var engineChatter = StatusLine()
+    /// Whether the chatter arrived after the last notice, so the newer of the
+    /// two wins when neither a project line nor an upload has the bar.
+    private var chatterIsNewer = false
     /// The newest line per project, so the bar can report the project in front
     /// rather than whichever one the engine happened to touch last.
     private var projectStatus: [String: StatusLine] = [:]
@@ -59,6 +65,8 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     /// How long a finished upload stays up before the engine's line returns.
     static var uploadHoldSeconds: TimeInterval = 3
 
+    /// What the indicator says, for the checks.
+    private(set) var syncIndicatorText = ""
     /// Left end of the bar: are both sides identical right now?
     private let syncStateDot = NSView()
     private let syncStateLabel = NSTextField(labelWithString: "")
@@ -236,6 +244,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             busy: busy,
             progress: progress
         )
+        chatterIsNewer = false
         renderStatus()
     }
 
@@ -243,8 +252,17 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     private func renderStatus() {
         // An upload borrows the bar; otherwise it reports the project in front,
         // falling back to the engine's own workspace-wide line.
-        let focused = focusedProject.flatMap { projectStatus[$0] }
-        let line = uploadStatus ?? focused ?? lastProjectLine ?? engineStatus
+        let line: StatusLine
+        if let upload = uploadStatus {
+            line = upload
+        } else if let focusedProject {
+            // Only this terminal's project, or a notice about the user's own
+            // action (终止, 重新同步, no local directory) — never another
+            // project's line, and never engine chatter.
+            line = projectStatus[focusedProject] ?? engineStatus
+        } else {
+            line = lastProjectLine ?? (chatterIsNewer ? engineChatter : engineStatus)
+        }
         let text = line.text
         let busy = line.busy
         let progress = line.progress
@@ -303,7 +321,8 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         // engine's own log, so they update the engine line but leave the
         // per-project lines alone — the bar prefers the project in front.
         if let counts = parseSyncCounts(text), counts.total > 0 {
-            engineStatus = StatusLine(text: text, busy: true, progress: Double(counts.done) / Double(counts.total))
+            engineChatter = StatusLine(text: text, busy: true, progress: Double(counts.done) / Double(counts.total))
+            chatterIsNewer = true
             renderStatus()
             return
         }
@@ -311,7 +330,8 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         // A verdict line: mark the finish so it is unmistakable next to the
         // moving bar it replaces.
         let settled = text.contains("同步完成") || text.contains("无需同步") || text.contains("已是最新")
-        engineStatus = StatusLine(text: settled ? "✓ \(text)" : text, busy: false)
+        engineChatter = StatusLine(text: settled ? "✓ \(text)" : text, busy: false)
+        chatterIsNewer = true
         renderStatus()
     }
 
@@ -424,6 +444,7 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
         guard focusedProject != project else { return }
         focusedProject = project
         renderStatus()
+        refreshSyncIndicator()
     }
 
     /// An upload borrows the bar. `holding` means it is over: the line stays up
@@ -454,13 +475,21 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
             return
         }
         syncControl.isHidden = false
-        syncControl.title = engineStatus.busy ? "终止" : "重新同步"
+        syncControl.title = isTransferring ? "终止" : "重新同步"
+    }
+
+    /// A transfer is under way for the project in front (any project, with
+    /// none in front), or the app itself started one.
+    private var isTransferring: Bool {
+        if engineStatus.busy { return true }
+        if let focusedProject { return activeTransfers[focusedProject] != nil }
+        return !activeTransfers.isEmpty
     }
 
     @objc private func toggleSync() {
         guard let workspace,
               let root = UserDefaults.standard.string(forKey: localRootKey(workspace)), !root.isEmpty else { return }
-        if engineStatus.busy {
+        if isTransferring {
             // Stopping the watcher aborts the transfer in flight; the files
             // already sent stay, and 重新同步 picks the rest up.
             syncManager?.stop()
@@ -487,7 +516,13 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     /// Folds every project's latest verdict into the dot and its label: one
     /// project that is not in sync is enough to say so.
     private func refreshSyncIndicator() {
-        let state = Self.aggregateState(statuses: projectSyncStatus, active: activeTransfers)
+        // The project of the tab in front, when there is one: the bar describes
+        // that terminal, and a count of every project in the workspace is about
+        // none of them in particular.
+        let statuses = focusedProject.map { name in projectSyncStatus.filter { $0.key == name } } ?? projectSyncStatus
+        let active = focusedProject.map { name in activeTransfers.filter { $0.key == name } } ?? activeTransfers
+        let state = Self.aggregateState(statuses: statuses, active: active)
+        syncIndicatorText = state?.text ?? ""
         syncStateDot.isHidden = state == nil
         syncStateLabel.isHidden = state == nil
         guard let state else { return }
