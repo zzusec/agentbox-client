@@ -119,9 +119,10 @@ final class UpdateManager {
         if interactive {
             let alert = NSAlert()
             alert.messageText = "发现新版本 \(release.tagName)"
-            alert.informativeText = release.body?.isEmpty == false
-                ? String(release.body!.prefix(800))
-                : "将下载并校验更新，然后重启应用完成安装。"
+            // Just what is about to happen. The release notes are written for
+            // whoever maintains this, not for the person being asked to click
+            // a button, and they filled the dialog with implementation detail.
+            alert.informativeText = "将下载并校验更新，然后重启应用完成安装。"
             alert.addButton(withTitle: "下载并安装")
             alert.addButton(withTitle: "稍后")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
