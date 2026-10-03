@@ -1047,6 +1047,10 @@ struct AppSmokeChecks {
         precondition(afterFont == afterResize,
                      "changing the font gives \(afterFont) columns, resizing gives \(afterResize)")
         precondition(afterFont > 0)
+        // The scrollbar is hidden: it can never scroll anything here, and the
+        // strip it occupied kept showing fragments nothing repainted.
+        precondition(views(in: surface).compactMap { $0 as? NSScroller }.allSatisfy(\.isHidden),
+                     "the terminal must not reserve a visible scrollbar")
         host.contentView = NSView()
     }
 

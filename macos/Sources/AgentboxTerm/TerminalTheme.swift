@@ -374,10 +374,6 @@ enum TerminalFit {
         return min(base, max(minimumSize, stepped))
     }
 
-    /// The strip SwiftTerm reserves for its scroller, which is not available
-    /// for columns.
-    static let scrollerWidth = NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
-
     /// The cell width SwiftTerm will compute for this font on macOS.
     static func cellWidth(of font: NSFont) -> CGFloat {
         max(1, font.advancement(forGlyph: font.glyph(withName: "W")).width)

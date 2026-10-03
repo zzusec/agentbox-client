@@ -338,6 +338,13 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         updateScrollerAppearance()
         scroller.knobProportion = 0.1
         scroller.isEnabled = false
+        // agentbox: the scrollbar is never usable here. tmux puts its client on
+        // the alternate screen, so no line ever reaches this view's own
+        // scrollback; scrolling goes to the program instead (the wheel is
+        // forwarded) or to tmux's copy-mode. Hiding it stops a 15pt strip that
+        // nothing repaints reliably — stray glyphs from earlier frames kept
+        // showing up there — and hands those points back as another column.
+        scroller.isHidden = true
         addSubview (scroller)
         scroller.action = #selector(scrollerActivated)
         scroller.target = self
@@ -370,7 +377,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
 
     func getEffectiveWidth (size: CGSize) -> CGFloat
     {
-        return (size.width-scroller.frame.width)
+        // agentbox: a hidden scroller takes no width, and both column counts go
+        // through here, so they stay in step either way.
+        return size.width - (scroller.isHidden ? 0 : scroller.frame.width)
     }
 
     open func scrolled(source terminal: Terminal, yDisp: Int) {
