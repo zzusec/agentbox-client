@@ -389,7 +389,11 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
 
     open func linefeed(source: Terminal) {
-        selection.selectNone()
+        // agentbox: see feedPrepare — a linefeed on the alternate screen does
+        // not move anything the selection points at.
+        if !terminal.isCurrentBufferAlternate {
+            selection.selectNone()
+        }
     }
 
     /// This vaiable controls whether mouse events are sent to the application running under the

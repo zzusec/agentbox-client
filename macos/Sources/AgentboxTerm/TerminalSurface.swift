@@ -57,6 +57,51 @@ final class TerminalSurface: TerminalView {
         if resized { needsDisplay = true }
     }
 
+    /// The text of the last selection, kept for ⌘C.
+    ///
+    /// The live selection is fragile: resizing, a font change and output on the
+    /// normal screen all drop it, and the keyboard copy then has nothing to
+    /// take even though the user did select something a moment ago. The text is
+    /// read while the drag is still in hand instead.
+    private var capturedSelection: String?
+
+    private func noteSelectionGesture(_ event: NSEvent) {
+        if event.type == .leftMouseDown, !event.modifierFlags.contains(.shift) {
+            // A fresh click starts over: it either clears the selection or
+            // begins a new one, and the old text must not outlive it.
+            capturedSelection = nil
+            return
+        }
+        guard event.type == .leftMouseDragged || event.type == .leftMouseUp else { return }
+        // After the view has handled the event, so the selection is up to date.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.selectionActive, let text = self.getSelection(), !text.isEmpty else { return }
+            self.capturedSelection = text
+        }
+    }
+
+    /// What ⌘C and the context menu copy: the live selection when there is one,
+    /// otherwise the text captured during the drag.
+    private var copyableSelection: String? {
+        if selectionActive, let text = getSelection(), !text.isEmpty {
+            return text
+        }
+        return capturedSelection
+    }
+
+    override func copy(_ sender: Any) {
+        guard let text = copyableSelection else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(copy(_:)) {
+            return copyableSelection != nil
+        }
+        return super.validateUserInterfaceItem(item)
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil {
@@ -76,6 +121,7 @@ final class TerminalSurface: TerminalView {
             matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
         ) { [weak self] event in
             guard let self, event.window === self.window else { return event }
+            self.noteSelectionGesture(event)
             guard TerminalThemeManager.mouseMode == .smart else { return event }
             if event.type == .leftMouseDown {
                 self.mouseGestureBypassed = event.modifierFlags.contains(.shift)
@@ -236,8 +282,7 @@ final class TerminalSurface: TerminalView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
               event.charactersIgnoringModifiers?.lowercased() == "c",
-              selectionActive,
-              let text = getSelection(), !text.isEmpty else {
+              let text = copyableSelection else {
             return super.performKeyEquivalent(with: event)
         }
         NSPasteboard.general.clearContents()

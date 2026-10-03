@@ -1092,6 +1092,14 @@ struct AppSmokeChecks {
         precondition(surface.performKeyEquivalent(with: command), "⌘C must be handled by the terminal")
         precondition(NSPasteboard.general.string(forType: .string)?.contains("copy me") == true,
                      "the selection must reach the clipboard")
+        // A selection must survive the program painting over it. On the
+        // alternate screen nothing scrolls, and an agent paints constantly —
+        // the highlight used to vanish before anyone could press ⌘C.
+        surface.feed(text: "\u{1B}[?1049h")      // alternate screen on
+        surface.selectAll(nil)
+        precondition(surface.selectionActive)
+        surface.feed(text: "more output\r\n")
+        precondition(surface.selectionActive, "output must not drop the selection on the alternate screen")
         // Anything else still travels its usual path.
         let other = NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,

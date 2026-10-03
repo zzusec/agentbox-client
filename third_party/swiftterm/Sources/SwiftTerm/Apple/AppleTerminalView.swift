@@ -1199,7 +1199,14 @@ extension TerminalView {
     func feedPrepare()
     {
         search.invalidate()
-        selection.active = false
+        // agentbox: output used to drop the selection unconditionally. On the
+        // alternate screen nothing scrolls, so the rows a selection points at
+        // stay where they are and it can simply survive — which matters because
+        // a full-screen program paints continuously (a spinner alone is enough)
+        // and the highlight disappeared before anyone could reach ⌘C.
+        if !terminal.isCurrentBufferAlternate {
+            selection.active = false
+        }
         startDisplayUpdates()
     }
 
