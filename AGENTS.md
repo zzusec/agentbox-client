@@ -437,6 +437,16 @@ data/
   欠费还是网络抖动，于是无限退避重连。前端 `term.js` 见 4000–4999 就把 reason 写进
   终端画面并停止自动重连。控制帧上限 125 字节，reason 由 `truncReason` 按 rune 截断。
 - 断开只停得住新的输入：tmux detach 不杀进程，已经在跑的 agent 会继续跑完。
+- `tmuxAttach` 给 tmux server 追加 `terminal-overrides` 的 `,*:smcup@:rmcup@`，让 tmux
+  **不把客户端切到备用屏**：备用屏上滚出去的行外层终端一行都收不到，客户端的滚轮和
+  滚动条就没有历史可翻。这是服务器选项，只对**之后附着**的客户端生效，所以要在 attach
+  之前设；运行中的 server 先 `show-options` 判断再追加，否则每连一次就多追加一份。
+  **这条被撤回过一次**（custom18 加，custom21 撤，custom26 再加）：撤回的理由是「全屏
+  程序留残片」，后来查明残片是 Mac 客户端自己的渲染 bug（SwiftTerm 两套公式算列数、
+  整屏重绘被关掉），和备用屏无关。再遇到残片**先确认是哪一端**：`tmux capture-pane -p`
+  看服务端那块屏有没有重复/错位，干净就别动这里。
+  注意这只管**客户端**的备用屏；窗格里的程序（Claude Code）仍跑在**窗格自己的**备用屏上
+  （`#{alternate_on}`），那层没有历史可言，TUI 的回滚要靠把滚轮事件转发给程序。
 - xterm 6 会丢掉 iOS 中文键盘直接上屏的标点（「，」等，上游 xtermjs/xterm.js#3070），也不认连按标点键时 iOS 不带按键事件的删除/替换（「，。？！」循环）。`term.ts` 的 `bridgeDroppedInput` 在 xterm 所有发送时机（keydown、keypress、229 差分定时器、输入事件）都过去后，若这次按键 xterm 一字未发且不在组字，才按 textarea 前后差异补发（先退格再插入，最多删 8 个字符）；升级 xterm 后若上游已修复（PR #5614），删掉它并保留 `test-browser.mjs` 的「恰好发送一次」断言。真机事件顺序用地址参数 `?imedebug` 打开 `term-input-debug.ts` 的诊断面板，上传到 `/shared/.file/`（只在开启期间记录，含期间输入的字符）。
 
 ### 文件/共享目录
@@ -594,6 +604,36 @@ data/
 - 项目终端（`mode=agent`）的启动命令存在 `sync_projects.command`（schema 12）。空值 = 项目所用工具的默认命令：claude 为 `claude --dangerously-skip-permissions`，codex 为 `codex --yolo`（`projectLaunch` / `defaultLaunchCommand`）。创建/修改时与默认相同的命令一律存成空串，`custom_command` 才有意义，没改过的项目也会跟随将来的默认值。
 - 命令在 tmux 里以 `exec /bin/bash -c <单引号转义后的命令>` 运行，所以可以写环境变量赋值、`&&`、管道。它以 agent 用户身份在容器内执行，能开这个终端的人本来就能手敲同样的命令，所以校验只防生成脚本被拆开：≤1024 字节、合法 UTF-8、禁止换行与控制字符。`TestAgentTermCommandQuotesLaunchCommand` 用真实 shell 钉住引号不会逃逸。
 - tmux 会话仍按项目名命名，已运行的终端不受修改影响；退出 agent 后重新打开项目终端才用新命令。
+
+### Mac 客户端终端（xterm.js in WKWebView）
+
+- 画终端的是 **xterm.js**，跑在 `WKWebView` 里（`macos/Sources/AgentboxTerm/WebTerminalView.swift`
+  + `macos/Resources/terminal/{terminal.html,terminal.js}`）。xterm 文件不单独 vendor：
+  `macos/scripts/stage-terminal-assets.sh` 从网页控制台的 `internal/web/static/vendor`
+  复制同一份构建进 App 的 `Contents/Resources/terminal`，所以**两个客户端永远是同一个
+  引擎版本**，升级 xterm 两边一起生效。`third_party/swiftterm` 已删除。
+- 换引擎的原因：SwiftTerm 的 macOS 视图层一天内打了 9 个本地补丁仍在出问题（列数两套
+  公式、滚动条那条带子无人重绘、每段输出都清掉选区、滚轮从不转发给程序）。**不要为了
+  省一个 WebView 换回原生终端控件。**
+- 分工：Swift 管 WebSocket、重连、心跳、上传时暂存输入（`TerminalBridge` /
+  `TerminalViewController` 没变）；页面管渲染、选区、输入法、折行、滚轮。两边只有两条
+  通道：`window.agentboxTerm.*`（Swift→页面）和 `webkit.messageHandlers.term`（页面→Swift）。
+  **输出必须 base64 过去**：PTY 是字节流，一个多字节字符可能跨两个 chunk，只有 xterm.js
+  自己的解码器能接回来。输出按一轮 runloop 攒一次再发，否则每个小 chunk 一次 JS 调用。
+- **列数行数只由 FitAddon 一处算**。这是换引擎最大的收益，别再在 Swift 侧另算一遍去发
+  resize——当初重影就是两处算法差 1～2 列、每次布局来回跳造成的。
+- 鼠标：「关闭」时页面**拦掉程序申请鼠标的 CSI 序列并记住**，切回「开启」时补发——程序
+  只在启动/连接时申请一次，不补发的话切回来点击永远到不了程序。⇧ 拖动在任何模式下都是
+  本地选中（xterm.js 的写法是 ⌥ 拖动，页面把 ⇧ 的 mousedown 重发成 ⌥）。
+- 外观默认跟随 **Terminal.app 的默认描述文件**（`TerminalAppProfile`）：字体名/字号直接
+  从存档里读，**不能 unarchive 成 NSFont**——Terminal.app 的默认字体 SF Mono Terminal
+  藏在它自己的包里，别的进程加载不到，NSFont 会悄悄换成别的字体；SF Mono 系列映射到
+  WebKit 的 `ui-monospace`。smoke 用 `AGENTBOX_IGNORE_TERMINAL_APP=1` 隔离 runner 自己的
+  Terminal.app 设置。
+- 测试：`macos/scripts/test-app-smoke.sh` 会先 stage 一份页面并用
+  `AGENTBOX_TERMINAL_ASSETS` 指过去（checks 不是 app bundle，读不到 Resources）；
+  `webTerminalChecks` 真的把页面跑起来——加载、报尺寸、拉宽加列、输出、选中进剪贴板、
+  右键菜单是终端自己的。WebKit 在干净 runner 上启动慢，等待上限给到 30 秒。
 
 ### 项目同步（abox-sync）
 
