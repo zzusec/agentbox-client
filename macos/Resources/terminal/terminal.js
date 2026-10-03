@@ -82,11 +82,29 @@
   // 鼠标上报 = 关闭: programs never get the mouse, so every drag selects and
   // the wheel scrolls this terminal's own history. Only sequences made of
   // mouse modes alone are dropped; anything mixed goes through untouched.
+  //
+  // What was held back is remembered, so switching back to 开启 hands the
+  // program the mouse it asked for: a program asks once, at start-up, and
+  // would otherwise stay deaf to clicks until it was restarted.
   const MOUSE_MODES = new Set([9, 1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016]);
+  const heldMouseModes = new Set();
+  const mouseModesOf = (params) => {
+    const modes = params.map((p) => (Array.isArray(p) ? p[0] : p));
+    return modes.length > 0 && modes.every((m) => MOUSE_MODES.has(m)) ? modes : null;
+  };
   term.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => {
     if (settings.mouse !== "off") return false;
-    const modes = params.map((p) => (Array.isArray(p) ? p[0] : p));
-    return modes.length > 0 && modes.every((m) => MOUSE_MODES.has(m));
+    const modes = mouseModesOf(params);
+    if (!modes) return false;
+    modes.forEach((m) => heldMouseModes.add(m));
+    return true;
+  });
+  // A program turning a mode off while it is held just forgets it.
+  term.parser.registerCsiHandler({ prefix: "?", final: "l" }, (params) => {
+    if (settings.mouse !== "off") return false;
+    const modes = mouseModesOf(params);
+    if (modes) modes.forEach((m) => heldMouseModes.delete(m));
+    return false;
   });
 
   // ⇧-drag selects locally even while a program tracks the mouse — the gesture
@@ -136,14 +154,28 @@
       term.write(Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)));
     },
     configure(next) {
+      const wasOff = settings.mouse === "off";
       settings = Object.assign({}, settings, next);
       term.options.theme = settings.theme;
       term.options.fontFamily = settings.fontFamily;
       document.body.style.background = settings.theme.background || "";
-      if (settings.mouse === "off") {
+      if (settings.mouse === "off" && !wasOff) {
         // A program that already turned tracking on keeps it until it says
-        // otherwise; switch it off locally so the setting applies right away.
+        // otherwise; switch it off locally so the setting applies right away,
+        // and remember it so 开启 can give it back.
+        // Exactly the tracking the program had, plus SGR encoding, which is
+        // what current programs ask for and xterm.js does not report.
+        const tracking = { x10: 9, vt200: 1000, drag: 1002, any: 1003 }[term.modes.mouseTrackingMode];
+        if (tracking) {
+          heldMouseModes.add(tracking);
+          heldMouseModes.add(1006);
+        }
         term.write("\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l");
+      } else if (settings.mouse !== "off" && wasOff && heldMouseModes.size > 0) {
+        // Hand back what the program asked for while the mouse was withheld.
+        const modes = [...heldMouseModes];
+        heldMouseModes.clear();
+        term.write(modes.map((m) => `\x1b[?${m}h`).join(""));
       }
       refit();
     },
