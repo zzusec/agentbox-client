@@ -15,6 +15,8 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$root/.build/release/AgentboxTerm" "$app/Contents/MacOS/AgentboxTerm"
 cp "$root/.build/release/abox-sync" "$app/Contents/Resources/abox-sync"
 cp "$root/Assets/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
+# The terminal page, and the same xterm.js build the web console serves.
+sh "$root/scripts/stage-terminal-assets.sh" "$app/Contents/Resources/terminal"
 cp "$root/Info.plist" "$app/Contents/Info.plist"
 if [ -n "$version" ]; then
   plutil -replace CFBundleShortVersionString -string "$version" "$app/Contents/Info.plist"

@@ -1,5 +1,4 @@
 import AppKit
-import SwiftTerm
 
 /// One terminal color scheme: the surface background/foreground, the cursor
 /// color and the 16 ANSI colors. Modeled after CLI-Manager's preset cards.
@@ -283,6 +282,43 @@ enum TerminalThemeManager {
         NotificationCenter.default.post(name: schemeChanged, object: nil)
     }
 
+    /// Everything the terminal page needs to draw, in xterm.js's own terms.
+    static func webTerminalSettings() -> [String: Any] {
+        let scheme = current
+        let names = [
+            "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+            "brightBlack", "brightRed", "brightGreen", "brightYellow",
+            "brightBlue", "brightMagenta", "brightCyan", "brightWhite",
+        ]
+        var theme: [String: Any] = [
+            "background": scheme.background,
+            "foreground": scheme.foreground,
+            "cursor": scheme.cursor,
+            "cursorAccent": scheme.background,
+            // The foreground at a third: visible on light and dark schemes alike.
+            "selectionBackground": scheme.foreground + "55",
+        ]
+        for (index, name) in names.enumerated() where index < scheme.ansi.count {
+            theme[name] = scheme.ansi[index]
+        }
+        return [
+            "theme": theme,
+            "fontFamily": cssFontFamily,
+            "fontSize": Double(fontSize),
+            "autoFit": autoFontSize,
+            "fitColumns": fitColumns,
+            "mouse": mouseMode.rawValue,
+        ]
+    }
+
+    /// The chosen family for CSS, followed by the CJK fonts the native cascade
+    /// used to fall back on, then any monospaced font.
+    static var cssFontFamily: String {
+        let family = fontFamily.resolvedName.flatMap { NSFont(name: $0, size: 13)?.familyName } ?? "Monaco"
+        let names = [family, "PingFang SC", "PingFang TC", "Hiragino Sans", "Apple SD Gothic Neo", "Apple Color Emoji"]
+        return names.map { "\"\($0)\"" }.joined(separator: ", ") + ", monospace"
+    }
+
     /// The terminal font: the chosen family with the CJK fallback cascade.
     static func font() -> NSFont {
         font(size: fontSize)
@@ -317,14 +353,6 @@ enum TerminalThemeManager {
         )
     }
 
-    static func termColor(_ hex: String) -> SwiftTerm.Color {
-        let value = hexValue(hex)
-        return SwiftTerm.Color(
-            red: UInt16((value & 0xFF0000) >> 16) * 257,
-            green: UInt16((value & 0x00FF00) >> 8) * 257,
-            blue: UInt16(value & 0x0000FF) * 257
-        )
-    }
 
     /// Normalizes free-form input to `#RRGGBB`: accepts an optional `#` and
     /// 3- or 6-digit hex. Returns nil for anything else — callers must treat
@@ -354,32 +382,5 @@ enum TerminalThemeManager {
         let green = (value & 0x00FF00) >> 8
         let blue = value & 0x0000FF
         return (0.299 * Double(red) + 0.587 * Double(green) + 0.114 * Double(blue)) > 140
-    }
-}
-
-
-/// Chooses the terminal font size for a given width.
-///
-/// A monospaced cell is as wide as the font's "W" advancement, which scales
-/// linearly with the point size, so the largest size that still shows a target
-/// number of columns is one division rather than a search. The user's size is
-/// the ceiling: this only ever shrinks, and never past `minimumSize`, where
-/// text would stop being readable in exchange for columns nobody can see.
-enum TerminalFit {
-    static let minimumSize: CGFloat = 8
-
-    static func size(base: CGFloat, cellWidthAtBase: CGFloat, width: CGFloat, columns: Int) -> CGFloat {
-        guard base > 0, cellWidthAtBase > 0, width > 0, columns > 0 else { return base }
-        let affordableCell = width / CGFloat(columns)
-        let scaled = base * affordableCell / cellWidthAtBase
-        // Half-point steps, rounded down: rounding up would overshoot the width
-        // by a fraction of a cell and lose the column it was bought for.
-        let stepped = (scaled * 2).rounded(.down) / 2
-        return min(base, max(minimumSize, stepped))
-    }
-
-    /// The cell width SwiftTerm will compute for this font on macOS.
-    static func cellWidth(of font: NSFont) -> CGFloat {
-        max(1, font.advancement(forGlyph: font.glyph(withName: "W")).width)
     }
 }

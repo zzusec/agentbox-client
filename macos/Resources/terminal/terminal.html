@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<link rel="stylesheet" href="xterm.css">
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #1e1e1e;
+  }
+  /* A little air on the left and top, as a native terminal has. The fit addon
+     measures this element, so the padding is never counted as columns. */
+  #term {
+    position: absolute;
+    inset: 4px 0 0 6px;
+  }
+</style>
+</head>
+<body>
+<div id="term"></div>
+<script src="xterm.js"></script>
+<script src="addon-fit.js"></script>
+<script src="addon-webgl.js"></script>
+<script src="terminal.js"></script>
+</body>
+</html>

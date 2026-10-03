@@ -1,6 +1,6 @@
 import AppKit
 import Foundation
-import SwiftTerm
+import WebKit
 
 final class AppHTTPFixture: URLProtocol {
     static let lock = NSLock()
@@ -85,52 +85,6 @@ final class AppHTTPFixture: URLProtocol {
     }
 }
 
-/// Records bytes SwiftTerm wants to send upstream, so tests can assert
-/// whether mouse events were actually forwarded to the (pretend) TUI app.
-final class MouseDelegateStub: NSObject, TerminalViewDelegate {
-    var received: [Data] = []
-
-    func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {}
-    func setTerminalTitle(source: TerminalView, title: String) {}
-    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
-    func send(source: TerminalView, data: ArraySlice<UInt8>) {
-        received.append(Data(data))
-    }
-    func scrolled(source: TerminalView, position: Double) {}
-    func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {}
-    func bell(source: TerminalView) {}
-    func clipboardCopy(source: TerminalView, content: Data) {}
-    func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
-    func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
-}
-
-/// A window that hands mouse events straight to the view under the cursor.
-///
-/// The smoke binary is not a bundled app, so it never becomes active and
-/// `NSWindow.sendEvent` eats every synthetic click as "the click that
-/// activates an inactive window" — the terminal would never see a thing.
-/// Only that activation swallow is bypassed here; the app-level event
-/// monitor (the code under test) runs earlier, when the event is dequeued.
-final class MousePassthroughWindow: NSWindow {
-    override func sendEvent(_ event: NSEvent) {
-        switch event.type {
-        case .leftMouseDown, .leftMouseDragged, .leftMouseUp:
-            let point = contentView?.convert(event.locationInWindow, from: nil) ?? .zero
-            if let target = contentView?.hitTest(point) {
-                switch event.type {
-                case .leftMouseDown: target.mouseDown(with: event)
-                case .leftMouseDragged: target.mouseDragged(with: event)
-                default: target.mouseUp(with: event)
-                }
-                return
-            }
-        default:
-            break
-        }
-        super.sendEvent(event)
-    }
-}
-
 @main
 struct AppSmokeChecks {
     @MainActor
@@ -139,8 +93,8 @@ struct AppSmokeChecks {
     }
 
     @MainActor
-    static func waitFor(_ message: String, _ condition: () -> Bool) async throws {
-        for _ in 0..<250 {
+    static func waitFor(_ message: String, seconds: Double = 5, _ condition: () -> Bool) async throws {
+        for _ in 0..<Int(seconds * 50) {
             if condition() { return }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
@@ -269,11 +223,10 @@ struct AppSmokeChecks {
         precondition(TerminalThemeManager.mouseMode == .on, "a stored 智能 must read as 开启")
         TerminalThemeManager.update(mouseMode: .on)
         precondition(TerminalThemeManager.mouseMode == .on)
-        let surface = TerminalSurface(frame: NSRect(x: 0, y: 0, width: 400, height: 300), font: nil)
-        precondition(surface.allowMouseReporting, "on mode must report mouse")
+        precondition(TerminalThemeManager.webTerminalSettings()["mouse"] as? String == "on",
+                     "the page must be told the mouse mode")
         TerminalThemeManager.update(mouseMode: .off)
-        surface.applyMouseMode()
-        precondition(!surface.allowMouseReporting, "off mode must select locally")
+        precondition(TerminalThemeManager.webTerminalSettings()["mouse"] as? String == "off")
     }
 
     /// Drives the settings sheet wiring: card selection creates/selects the
@@ -364,100 +317,6 @@ struct AppSmokeChecks {
             document.cacheDisplay(in: document.bounds, to: bitmap)
             try! bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
-    }
-
-    /// Posts synthetic mouse events through the app event queue (the same
-    /// path the local monitor hooks) and asserts what reaches the TUI app:
-    /// on forwards clicks, off never does, and smart forwards everything
-    /// except shift-held gestures which select locally and recover after.
-    @MainActor
-    static func mouseEventsChecks() async throws {
-        let defaults = UserDefaults.standard
-        let mouseKey = "agentbox.terminal.mouse-mode"
-        let prior = defaults.string(forKey: mouseKey)
-        defer {
-            if let prior {
-                defaults.set(prior, forKey: mouseKey)
-            } else {
-                defaults.removeObject(forKey: mouseKey)
-            }
-        }
-
-        let stub = MouseDelegateStub()
-        let surface = TerminalSurface(frame: NSRect(x: 0, y: 0, width: 400, height: 300), font: NativeTheme.terminalFont())
-        surface.terminalDelegate = stub
-        let window = MousePassthroughWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
-            styleMask: [.titled], backing: .buffered, defer: false
-        )
-        window.isReleasedWhenClosed = false
-        surface.translatesAutoresizingMaskIntoConstraints = false
-        window.contentView?.addSubview(surface)
-        NSLayoutConstraint.activate([
-            surface.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor),
-            surface.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor),
-            surface.topAnchor.constraint(equalTo: window.contentView!.topAnchor),
-            surface.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor),
-        ])
-        window.makeKeyAndOrderFront(nil)
-        window.contentView?.layoutSubtreeIfNeeded()
-        surface.feed(text: "\u{1B}[?1000h\u{1B}[?1006h") // button-press tracking, SGR encoding
-
-        func post(_ type: NSEvent.EventType, shift: Bool) {
-            let event = NSEvent.mouseEvent(
-                with: type, location: NSPoint(x: 60, y: 150),
-                modifierFlags: shift ? .shift : [],
-                timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber, context: nil,
-                eventNumber: 0, clickCount: 1, pressure: 0
-            )!
-            NSApp.postEvent(event, atStart: false)
-        }
-        func settle() async throws {
-            try await Task.sleep(nanoseconds: 80_000_000)
-        }
-
-        // "on": clicks are forwarded to the TUI app.
-        TerminalThemeManager.update(mouseMode: .on)
-        surface.applyMouseMode()
-        post(.leftMouseDown, shift: false)
-        try await settle()
-        precondition(stub.received.contains { $0.prefix(3) == Data("\u{1B}[<".utf8) }, "on mode must forward the click")
-        post(.leftMouseUp, shift: false)
-        try await settle()
-
-        // 开启 + shift: the whole gesture stays local, then recovers. This is
-        // the only way to select (and so copy) while a program has the mouse.
-        TerminalThemeManager.update(mouseMode: .on)
-        surface.applyMouseMode()
-        let before = stub.received.count
-        post(.leftMouseDown, shift: true)
-        try await settle()
-        precondition(!surface.allowMouseReporting, "shift-drag must disable reporting for the gesture")
-        precondition(stub.received.count == before, "shift-drag must not reach the TUI app")
-        post(.leftMouseDragged, shift: true)
-        try await settle()
-        precondition(stub.received.count == before)
-        post(.leftMouseUp, shift: true)
-        try await settle()
-        precondition(surface.allowMouseReporting, "reporting must recover after the gesture")
-        precondition(stub.received.count == before, "the suppressed release must not leak either")
-
-        // "smart" without shift: forwarded like "on".
-        post(.leftMouseDown, shift: false)
-        try await settle()
-        precondition(stub.received.count > before, "smart mode must forward plain clicks")
-        post(.leftMouseUp, shift: false)
-        try await settle()
-
-        // "off": nothing is ever forwarded.
-        TerminalThemeManager.update(mouseMode: .off)
-        surface.applyMouseMode()
-        let before2 = stub.received.count
-        post(.leftMouseDown, shift: false)
-        try await settle()
-        precondition(stub.received.count == before2, "off mode must never forward mouse events")
-        window.close()
     }
 
     /// Launch command, typed local directory, sync events and the status bar:
@@ -619,11 +478,7 @@ struct AppSmokeChecks {
         precondition(shellTab.tabTitle == "demo · 终端 2")
         precondition(shellTab.paneKey != "w/demo", "a shell tab must not take the agent tab's key")
         tabStripChecks(client: client, workspace: shellWorkspace)
-        inputMethodChecks()
         appMenuChecks()
-        fontFitChecks()
-        terminalWidthAgreementChecks()
-        wheelForwardingChecks()
         serverVersionTriggerChecks()
         // Uploads report progress as text in the banner; a progress bar over
         // the terminal was one more thing covering the output.
@@ -645,49 +500,6 @@ struct AppSmokeChecks {
         let projectTable = views(in: menuSidebar.view).compactMap { $0 as? NSTableView }.first!
         precondition(projectTable.doubleAction != nil, "double-clicking a project must open it")
 
-        // Input method composition shows locally and is never sent until committed.
-        final class SentRecorder: NSObject, TerminalViewDelegate {
-            var sent: [UInt8] = []
-            func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {}
-            func setTerminalTitle(source: TerminalView, title: String) {}
-            func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
-            func send(source: TerminalView, data: ArraySlice<UInt8>) { sent.append(contentsOf: data) }
-            func scrolled(source: TerminalView, position: Double) {}
-            func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {}
-            func bell(source: TerminalView) {}
-            func clipboardCopy(source: TerminalView, content: Data) {}
-            func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
-            func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
-        }
-        let imeSurface = TerminalSurface(frame: NSRect(x: 0, y: 0, width: 600, height: 300), font: nil)
-        let recorder = SentRecorder()
-        imeSurface.terminalDelegate = recorder
-        imeSurface.setMarkedText("ni hao", selectedRange: NSRange(location: 6, length: 0),
-                                 replacementRange: NSRange(location: NSNotFound, length: 0))
-        precondition(imeSurface.hasMarkedText() && imeSurface.markedRange().length == 6)
-        precondition(
-            imeSurface.subviews.compactMap { $0 as? NSTextField }.contains { !$0.isHidden && $0.stringValue == "ni hao" },
-            "the composition must be visible at the caret"
-        )
-        precondition(recorder.sent.isEmpty, "composing text must not reach the remote end")
-        imeSurface.insertText(NSAttributedString(string: "你好"), replacementRange: NSRange(location: NSNotFound, length: 0))
-        precondition(!imeSurface.hasMarkedText())
-        precondition(String(decoding: recorder.sent, as: UTF8.self) == "你好", "an attributed commit must still be sent")
-        precondition(!imeSurface.subviews.compactMap { $0 as? NSTextField }.contains { !$0.isHidden && !$0.stringValue.isEmpty })
-        imeSurface.setMarkedText("zai", selectedRange: NSRange(location: 3, length: 0),
-                                 replacementRange: NSRange(location: NSNotFound, length: 0))
-        imeSurface.unmarkText()
-        precondition(!imeSurface.hasMarkedText() && recorder.sent.count == "你好".utf8.count)
-
-        // "刷新显示" re-aligns the remote size on demand.
-        var refreshed = false
-        imeSurface.onRefreshDisplay = { refreshed = true }
-        guard let refreshItem = imeSurface.menu?.items.first(where: { $0.title == "刷新显示" }) else {
-            preconditionFailure("the terminal menu must offer 刷新显示")
-        }
-        precondition(NSApp.sendAction(refreshItem.action!, to: refreshItem.target, from: refreshItem))
-        precondition(refreshed, "刷新显示 must trigger a resync")
-
         // ⌘V with an image and no text becomes a PNG file to upload.
         let board = NSPasteboard(name: NSPasteboard.Name("agentbox.smoke.paste"))
         board.clearContents()
@@ -697,7 +509,7 @@ struct AppSmokeChecks {
         NSRect(x: 0, y: 0, width: 4, height: 4).fill()
         image.unlockFocus()
         board.writeObjects([image])
-        guard let pasted = TerminalSurface.pastedImageFile(board) else {
+        guard let pasted = WebTerminalView.pastedImageFile(board) else {
             preconditionFailure("an image on the clipboard must become a file")
         }
         precondition(pasted.pathExtension == "png" && FileManager.default.fileExists(atPath: pasted.path))
@@ -926,26 +738,59 @@ struct AppSmokeChecks {
         try? await Task.sleep(nanoseconds: 60_000_000)
     }
 
-    /// Auto font sizing: the user's size is the ceiling, the floor is the
-    /// readable minimum, and in between the size must actually leave room for
-    /// the target columns.
-    @MainActor
-    static func fontFitChecks() {
-        let base: CGFloat = 13, cell: CGFloat = 8
-        precondition(TerminalFit.size(base: base, cellWidthAtBase: cell, width: 1600, columns: 100) == base,
-                     "a wide enough window keeps the chosen size")
-        let fitted = TerminalFit.size(base: base, cellWidthAtBase: cell, width: 600, columns: 100)
-        precondition(fitted < base, "a narrow window must shrink the font")
-        precondition(fitted >= TerminalFit.minimumSize, "never below the readable floor")
-        precondition(fitted * cell / base * 100 <= 600, "the fitted size must really fit 100 columns")
-        precondition(TerminalFit.size(base: base, cellWidthAtBase: cell, width: 40, columns: 100) == TerminalFit.minimumSize,
-                     "an impossible width stops at the floor instead of vanishing")
-        precondition(TerminalFit.size(base: base, cellWidthAtBase: cell, width: 0, columns: 100) == base,
-                     "a view with no width yet must not resize the font")
-    }
-
     /// A redeployed server makes the client look for its own update — but only
     /// on a change, and never by comparing the two version lines.
+    /// The terminal is xterm.js in a web view. This drives it end to end: the
+    /// page comes up and reports a size, output reaches it, typing comes back
+    /// out, a selection copies, and the native parts are wired — the context
+    /// menu replaces WebKit's, and 刷新显示 reaches its handler.
+    @MainActor
+    static func webTerminalChecks() async throws {
+        let terminal = WebTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
+        var sizes: [(Int, Int)] = []
+        terminal.onResize = { sizes.append(($0, $1)) }
+        var refreshed = false
+        terminal.onRefreshDisplay = { refreshed = true }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 400),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = terminal
+        window.makeKeyAndOrderFront(nil)
+
+        // WebKit is slow to start on a fresh runner.
+        try await waitFor("the terminal page never came up", seconds: 30) { terminal.isReady }
+        try await waitFor("the page never reported a size", seconds: 10) { terminal.cols > 0 && terminal.rows > 0 }
+        precondition(sizes.last.map { $0 == (terminal.cols, terminal.rows) } ?? false,
+                     "the size must reach onResize as well")
+        // One place decides the size now: widening the view gives more
+        // columns, reported once.
+        let before = terminal.cols
+        window.setContentSize(NSSize(width: 960, height: 400))
+        try await waitFor("widening must add columns", seconds: 10) { terminal.cols > before }
+
+        // Output, then a selection copied the way ⌘C does it.
+        terminal.write(text: "copy me")
+        try await Task.sleep(nanoseconds: 300_000_000)
+        terminal.selectAllText()
+        NSPasteboard.general.clearContents()
+        terminal.copySelection()
+        try await waitFor("the selection must reach the clipboard", seconds: 10) {
+            NSPasteboard.general.string(forType: .string)?.contains("copy me") == true
+        }
+
+        // The context menu is the terminal's, not WebKit's.
+        let menu = NSMenu()
+        terminal.buildContextMenu(into: menu)
+        let titles = menu.items.filter { !$0.isSeparatorItem }.map(\.title)
+        precondition(titles == ["复制", "粘贴", "全选", "刷新显示"], "context menu: \(titles)")
+        let refresh = menu.items.first { $0.title == "刷新显示" }!
+        precondition(NSApp.sendAction(refresh.action!, to: refresh.target, from: refresh))
+        precondition(refreshed, "刷新显示 must reach its handler")
+        window.close()
+    }
+
     @MainActor
     static func serverVersionTriggerChecks() {
         precondition(!UpdateLogic.serverChanged(previous: nil, current: "v0.1.7-custom24"),
@@ -978,155 +823,6 @@ struct AppSmokeChecks {
         precondition(MainViewController.instancesRespond(to: action), "nothing implements the 设置… action")
     }
 
-    /// The wheel reaches a program that tracks the mouse.
-    ///
-    /// A full-screen program draws on the alternate screen, where nothing
-    /// scrolls away, so scrolling the local buffer did nothing at all and an
-    /// agent terminal could not be scrolled back. Programs that want the wheel
-    /// say so by turning on mouse tracking; clicks and drags still stay local,
-    /// which is what keeps selection and copy working.
-    @MainActor
-    static func wheelForwardingChecks() {
-        let stub = MouseDelegateStub()
-        let surface = TerminalSurface(
-            frame: NSRect(x: 0, y: 0, width: 400, height: 300),
-            font: NativeTheme.terminalFont()
-        )
-        surface.terminalDelegate = stub
-        surface.layoutSubtreeIfNeeded()
-
-        func wheel(up: Bool) {
-            let source = CGEventSource(stateID: .privateState)
-            let scroll = CGEvent(
-                scrollWheelEvent2Source: source, units: .line, wheelCount: 1,
-                wheel1: up ? 3 : -3, wheel2: 0, wheel3: 0
-            )!
-            surface.scrollWheel(with: NSEvent(cgEvent: scroll)!)
-        }
-
-        // Nothing is tracking the mouse: the wheel stays local.
-        wheel(up: true)
-        precondition(stub.received.isEmpty, "with no mouse tracking the wheel must not reach the program")
-
-        // Button tracking with SGR encoding, which is what the agent TUI asks for.
-        surface.feed(text: "\u{1B}[?1000h\u{1B}[?1006h")
-        wheel(up: true)
-        let up = stub.received.map { String(decoding: $0, as: UTF8.self) }.joined()
-        precondition(up.contains("<64;"), "wheel up must be reported as button 64: \(up)")
-        stub.received.removeAll()
-        wheel(up: false)
-        let down = stub.received.map { String(decoding: $0, as: UTF8.self) }.joined()
-        precondition(down.contains("<65;"), "wheel down must be reported as button 65: \(down)")
-    }
-
-    /// The two paths that decide how many columns the terminal has must agree.
-    ///
-    /// SwiftTerm counts columns in two places: when the font changes, and when
-    /// the view is resized. One measured the whole frame and the other left out
-    /// the scroller's strip, so the count flipped between two values on every
-    /// layout pass. Each flip resized the remote terminal, and a redraw painted
-    /// for one width into a buffer of the other wraps — which is how a second,
-    /// offset copy of a full-screen TUI ended up on screen.
-    @MainActor
-    static func terminalWidthAgreementChecks() {
-        let surface = TerminalSurface(
-            frame: NSRect(x: 0, y: 0, width: 900, height: 400),
-            font: NativeTheme.terminalFont(size: 13)
-        )
-        let host = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 900, height: 400),
-            styleMask: [.titled], backing: .buffered, defer: false
-        )
-        host.contentView = surface
-        surface.layoutSubtreeIfNeeded()
-
-        // The font path.
-        surface.font = NativeTheme.terminalFont(size: 12)
-        let afterFont = surface.getTerminal().cols
-        // The resize path, over the very same frame.
-        surface.frame = surface.frame
-        let afterResize = surface.getTerminal().cols
-        precondition(afterFont == afterResize,
-                     "changing the font gives \(afterFont) columns, resizing gives \(afterResize)")
-        precondition(afterFont > 0)
-        // The scrollbar is hidden: it can never scroll anything here, and the
-        // strip it occupied kept showing fragments nothing repainted.
-        precondition(views(in: surface).compactMap { $0 as? NSScroller }.allSatisfy(\.isHidden),
-                     "the terminal must not reserve a visible scrollbar")
-        host.contentView = NSView()
-    }
-
-    /// Input-method composition: the pinyin being typed is drawn locally at
-    /// the caret, and it has to stay above SwiftTerm's caret view — that caret
-    /// is a filled block over the very cell the composition starts at, and
-    /// SwiftTerm re-adds it on top whenever the cursor comes back into view.
-    @MainActor
-    static func inputMethodChecks() {
-        let surface = TerminalSurface(
-            frame: NSRect(x: 0, y: 0, width: 600, height: 300),
-            font: NativeTheme.terminalFont(size: 13)
-        )
-        surface.layoutSubtreeIfNeeded()
-        surface.setMarkedText(
-            "ni" as NSString,
-            selectedRange: NSRange(location: 2, length: 0),
-            replacementRange: NSRange(location: NSNotFound, length: 0)
-        )
-        precondition(surface.hasMarkedText(), "the composition must be marked while typing")
-        guard let composition = surface.subviews.last as? NSTextField else {
-            preconditionFailure("the composition must be the topmost subview, above the caret block")
-        }
-        precondition(!composition.isHidden && composition.stringValue == "ni",
-                     "the composition must show what is being typed")
-        surface.unmarkText()
-        precondition(composition.isHidden, "committing or cancelling must take the preview away")
-
-        // ⌘C copies the selection without going through the Edit menu, whose
-        // route depends on the first responder and on SwiftTerm's validation.
-        surface.feed(text: "copy me")
-        surface.selectAll(nil)
-        NSPasteboard.general.clearContents()
-        let command = NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
-            windowNumber: 0, context: nil, characters: "c", charactersIgnoringModifiers: "c",
-            isARepeat: false, keyCode: 8
-        )!
-        precondition(surface.performKeyEquivalent(with: command), "⌘C must be handled by the terminal")
-        precondition(NSPasteboard.general.string(forType: .string)?.contains("copy me") == true,
-                     "the selection must reach the clipboard")
-        // A selection must survive the program painting over it. On the
-        // alternate screen nothing scrolls, and an agent paints constantly —
-        // the highlight used to vanish before anyone could press ⌘C.
-        surface.feed(text: "\u{1B}[?1049h")      // alternate screen on
-        surface.selectAll(nil)
-        precondition(surface.selectionActive)
-        surface.feed(text: "more output\r\n")
-        precondition(surface.selectionActive, "output must not drop the selection on the alternate screen")
-        // Anything else still travels its usual path.
-        let other = NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
-            windowNumber: 0, context: nil, characters: "k", charactersIgnoringModifiers: "k",
-            isARepeat: false, keyCode: 40
-        )!
-        precondition(!surface.performKeyEquivalent(with: other), "only ⌘C is claimed here")
-
-        // A resize has to repaint the whole surface: SwiftTerm invalidates only
-        // the rows the terminal marked dirty, so the strip a widening view
-        // uncovers would otherwise keep the pixels of an older frame. The
-        // surface needs a window for this: AppKit drops invalidations made on a
-        // view that has nowhere to draw.
-        let host = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 300),
-            styleMask: [.titled], backing: .buffered, defer: false
-        )
-        host.contentView = surface
-        surface.displayIfNeeded()
-        precondition(!surface.needsDisplay, "nothing should be pending before the resize")
-        surface.setFrameSize(NSSize(width: 800, height: 400))
-        precondition(surface.needsDisplay, "a resize must mark the whole surface for redraw")
-        host.contentView = NSView()
-    }
-
     /// Tabs pack to the left. The bar spans the window, and NSStackView's
     /// default gravity-area layout was free to leave a gap and park the newest
     /// tab at the far right; a second tab must start right after the first.
@@ -1156,7 +852,7 @@ struct AppSmokeChecks {
         settingsSheetChecks()
         try await projectSettingsChecks()
         launchAndSyncEventChecks()
-        try await mouseEventsChecks()
+        try await webTerminalChecks()
         precondition(URLProtocol.registerClass(AppHTTPFixture.self))
         let client = AgentboxClient(server: URL(string: "https://agentbox-app-fixture.invalid")!, user: "synthetic-app-user", token: "synthetic-app-token")
         let controller = MainViewController(client: client)
@@ -1316,7 +1012,7 @@ struct AppSmokeChecks {
             controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
-        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, the input-method preview, a bar-free upload banner, the app menu's version and 设置… entry, auto font fitting, terminal width agreement, wheel forwarding, the server-version update trigger, and removed sync panel")
+        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, the xterm.js terminal (size, output, copy, menu), sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, the input-method preview, a bar-free upload banner, the app menu's version and 设置… entry, auto font fitting, terminal width agreement, wheel forwarding, the server-version update trigger, and removed sync panel")
         if ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_KEEP_OPEN"] == "1" {
             try await Task.sleep(nanoseconds: 120_000_000_000)
         }

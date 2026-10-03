@@ -133,9 +133,9 @@ final class TerminalGridViewController: NSViewController {
 
     override func viewDidLayout() {
         super.viewDidLayout()
-        // Window resize / sidebar toggle: keep the PTY width in lockstep with
-        // the visible width, or SwiftTerm leaves the uncovered strip with
-        // stale cells (bottom rows appearing at the right edge).
+        // Window resize / sidebar toggle: the page watches its own size and
+        // refits, but a tab that just came back from the background measured
+        // nothing while hidden, so it is asked once more.
         selected?.refitPTY()
     }
 

@@ -10,15 +10,9 @@ let package = Package(
     products: [
         .executable(name: "AgentboxTerm", targets: ["AgentboxTerm"]),
     ],
-    dependencies: [
-        .package(path: "../third_party/swiftterm"),
-    ],
     targets: [
         .executableTarget(
             name: "AgentboxTerm",
-            dependencies: [
-                .product(name: "SwiftTerm", package: "swiftterm"),
-            ],
             path: "Sources/AgentboxTerm"
         ),
     ],

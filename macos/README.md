@@ -1,7 +1,8 @@
 # agentbox-client for macOS
 
-agentbox-client is a native macOS terminal for agentbox workspaces. It uses
-SwiftTerm for terminal emulation and a Go `abox-sync` sidecar for project
+agentbox-client is a native macOS terminal for agentbox workspaces. The
+terminal screen is xterm.js in a WKWebView — the same engine and socket
+protocol as the web console — and a Go `abox-sync` sidecar handles project
 synchronization.
 
 ## Build
@@ -19,8 +20,10 @@ cd macos
 open "dist/agentbox-client.app"
 ```
 
-The build vendors SwiftTerm 1.5.0 under `third_party/swiftterm`, so building
-does not fetch GitHub dependencies.
+The terminal page lives in `Resources/terminal`; the build copies it into the
+app together with the xterm.js files the web console already vendors under
+`internal/web/static/vendor` (`scripts/stage-terminal-assets.sh`), so building
+fetches nothing and both clients run one xterm.js build.
 
 ## First connection
 
@@ -207,8 +210,9 @@ archives whose SHA-256 cannot be verified.
 
 Current limitations:
 
-- Full iTerm2 feature parity is not implemented yet; tabs, native rendering,
-  search, IME, Fonts and basic terminal protocols come from SwiftTerm.
+- Full iTerm2 feature parity is not implemented yet. Rendering, selection,
+  IME and terminal protocols come from xterm.js; the socket, reconnects,
+  uploads and the clipboard are native.
 - Sync conflict resolution is exposed through the sidecar status, not a
   graphical merge UI yet.
 - Live `.git` synchronization is intentionally disabled. Git metadata must be

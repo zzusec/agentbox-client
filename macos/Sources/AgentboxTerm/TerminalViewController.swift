@@ -1,5 +1,4 @@
 import AppKit
-import SwiftTerm
 
 /// What a terminal tab is attached to. The agent tab is the project's single
 /// Claude/Codex session; shell tabs are plain shells in the instance
@@ -15,7 +14,7 @@ enum TerminalConnectionState {
     case error
 }
 
-final class TerminalViewController: NSViewController, TerminalViewDelegate {
+final class TerminalViewController: NSViewController {
     let workspace: Workspace
     let project: RemoteProject
     let kind: TerminalKind
@@ -32,7 +31,7 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
     private var lastSentRows = 0
 
     private let client: AgentboxClient
-    private let surface: TerminalSurface
+    private let surface = WebTerminalView(frame: .zero)
     private var bridge: TerminalBridge?
 
     /// Keystrokes typed while a dropped or pasted file is still uploading.
@@ -63,10 +62,6 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         case let .shell(id, _):
             self.paneKey = "\(workspace.id)/\(project.name)#shell-\(id)"
         }
-        self.surface = TerminalSurface(
-            frame: .zero,
-            font: NativeTheme.terminalFont()
-        )
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -99,7 +94,16 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        surface.terminalDelegate = self
+        surface.onInput = { [weak self] data in
+            self?.handleInput(data)
+        }
+        surface.onResize = { [weak self] cols, rows in
+            self?.sendSize(cols: cols, rows: rows)
+        }
+        surface.onTitle = { [weak self] title in
+            guard let self, self.isActive else { return }
+            self.view.window?.title = "\(self.tabTitle) · \(title)"
+        }
         surface.onDropFiles = { [weak self] urls in
             self?.upload(urls)
         }
@@ -114,14 +118,10 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         connect()
     }
 
+    /// Colours, font and mouse handling go to the page as one settings object;
+    /// it refits, and reports a new size if the columns changed.
     @objc private func applyTheme() {
-        let scheme = TerminalThemeManager.current
-        surface.nativeBackgroundColor = TerminalThemeManager.nsColor(scheme.background)
-        surface.nativeForegroundColor = TerminalThemeManager.nsColor(scheme.foreground)
-        surface.installColors(scheme.ansi.map { TerminalThemeManager.termColor($0) })
-        applyFittedFont()
-        surface.applyMouseMode()
-        refitPTY()
+        surface.configure(TerminalThemeManager.webTerminalSettings())
     }
 
     deinit {
@@ -130,7 +130,7 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
 
     override func viewDidAppear() {
         super.viewDidAppear()
-        view.window?.makeFirstResponder(surface)
+        surface.focusTerminal()
     }
 
     /// The tab chip's title: the project for its agent session, "终端 N" for
@@ -154,17 +154,17 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
             // The server refused on purpose (quota, account access); the
             // reason says why, and retrying would just be refused again.
             let text = reason.isEmpty ? "服务器关闭了连接" : reason
-            surface.feed(text: "\r\n\(red)\(text)\(reset)\r\n\(dim)处理后双击标签或按任意键重新连接。\(reset)\r\n")
+            surface.write(text: "\r\n\(red)\(text)\(reset)\r\n\(dim)处理后双击标签或按任意键重新连接。\(reset)\r\n")
         case 1000:
             // A clean close: tmux handed the session to another window (or
             // the shell exited). Taking it straight back would make two
             // windows pull it back and forth.
-            surface.feed(text: "\r\n\(dim)连接已结束（会话可能已在其他窗口打开）。双击标签或按任意键重新连接。\(reset)\r\n")
+            surface.write(text: "\r\n\(dim)连接已结束（会话可能已在其他窗口打开）。双击标签或按任意键重新连接。\(reset)\r\n")
         default:
             // No close frame: the network dropped or the server restarted.
             let delay = min(15.0, pow(2.0, Double(reconnectAttempt)))
             reconnectAttempt += 1
-            surface.feed(text: "\r\n\(dim)连接中断，\(Int(delay)) 秒后自动重连…（按任意键立即重连）\(reset)\r\n")
+            surface.write(text: "\r\n\(dim)连接中断，\(Int(delay)) 秒后自动重连…（按任意键立即重连）\(reset)\r\n")
             let work = DispatchWorkItem { [weak self] in self?.reconnect(manual: false) }
             reconnectWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
@@ -183,7 +183,7 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         old?.close()
         lastSentCols = 0
         lastSentRows = 0
-        surface.feed(text: "\r\n\u{001B}[2m正在重新连接…\u{001B}[0m\r\n")
+        surface.write(text: "\r\n\u{001B}[2m正在重新连接…\u{001B}[0m\r\n")
         connect()
     }
 
@@ -206,46 +206,18 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
     }
 
     func activateTerminal() {
-        view.window?.makeFirstResponder(surface)
+        surface.focusTerminal()
     }
 
-    /// Re-fit the PTY and terminal grid to the current visible size. Needed
-    /// after a tab returns to the hierarchy: while backgrounded the view
-    /// receives no layout events, so the grid keeps the old column count and
-    /// SwiftTerm leaves the uncovered strip unpainted (stale pixels show).
-    /// The font for the width the terminal actually has.
-    ///
-    /// With 自动字号 on, a window too narrow to show the target column count at
-    /// the chosen size gets a smaller one instead, so a TUI is given the width
-    /// it needs rather than truncating its own output. Changing the font makes
-    /// SwiftTerm recompute its cell size, which is why this runs before the
-    /// columns are read.
-    private func applyFittedFont() {
-        let base = TerminalThemeManager.fontSize
-        var size = base
-        if TerminalThemeManager.autoFontSize {
-            size = TerminalFit.size(
-                base: base,
-                cellWidthAtBase: TerminalFit.cellWidth(of: TerminalThemeManager.font(size: base)),
-                width: surface.bounds.width,
-                columns: TerminalThemeManager.fitColumns
-            )
-        }
-        let font = TerminalThemeManager.font(size: size)
-        if surface.font != font {
-            surface.font = font
-        }
-    }
-
+    /// Asks the page to fit the grid to the view again — needed after a tab
+    /// returns to the hierarchy, since a hidden page measures nothing. A
+    /// changed size comes back through onResize and is sent from there.
     func refitPTY() {
-        view.layoutSubtreeIfNeeded()
-        applyFittedFont()
-        let terminal = surface.getTerminal()
-        guard terminal.cols != lastSentCols || terminal.rows != lastSentRows else { return }
-        sendSize(cols: terminal.cols, rows: terminal.rows)
+        surface.refit()
     }
 
     private func sendSize(cols: Int, rows: Int) {
+        guard cols > 0, rows > 0 else { return }
         lastSentCols = cols
         lastSentRows = rows
         bridge?.resize(cols: cols, rows: rows)
@@ -261,9 +233,7 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
     /// so this sends one row less and then the true size, which is exactly
     /// what dragging the window did.
     func resyncSize() {
-        view.layoutSubtreeIfNeeded()
-        let terminal = surface.getTerminal()
-        let cols = terminal.cols, rows = terminal.rows
+        let cols = surface.cols, rows = surface.rows
         guard cols > 0, rows > 1, bridge != nil else { return }
         bridge?.resize(cols: cols, rows: rows - 1)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
@@ -273,7 +243,7 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
 
     private func connect() {
         guard let url = client.terminalURL(workspace: workspace, project: project.name, kind: kind) else {
-            surface.feed(text: "\r\n无法生成终端连接地址。\r\n")
+            surface.write(text: "\r\n无法生成终端连接地址。\r\n")
             setConnection(.error)
             return
         }
@@ -287,7 +257,7 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
             guard let self else { return }
             self.reconnectAttempt = 0
             self.setConnection(.connected)
-            self.surface.feed(byteArray: ArraySlice(data))
+            self.surface.write(data)
             if !aligned, let bridge, bridge === self.bridge {
                 aligned = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
@@ -311,9 +281,10 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
         bridge.connect()
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            let terminal = self.surface.getTerminal()
-            self.sendSize(cols: terminal.cols, rows: terminal.rows)
-            self.surface.window?.makeFirstResponder(self.surface)
+            // The page may not have measured yet; then its first size report
+            // arrives through onResize instead.
+            self.sendSize(cols: self.surface.cols, rows: self.surface.rows)
+            self.surface.focusTerminal()
         }
     }
 
@@ -446,15 +417,25 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
     /// in that order, which is the whole point of holding it.
     private func finishUpload(id: UUID, serverPaths: [String]) {
         uploadTasks.removeValue(forKey: id)
-        if !serverPaths.isEmpty {
-            let text = serverPaths.map(shellQuote).joined(separator: " ")
-            let terminal = surface.getTerminal()
-            if terminal.bracketedPasteMode {
-                bridge?.send(data: Data("\u{001B}[200~\(text)\u{001B}[201~".utf8))
-            } else {
-                bridge?.send(data: Data(text.utf8))
-            }
+        guard !serverPaths.isEmpty else {
+            return releaseUploadHold()
         }
+        let text = serverPaths.map(shellQuote).joined(separator: " ")
+        // Whether the program wants bracketed paste is the page's to say, and
+        // asking is asynchronous: the release of held input waits for the
+        // answer, so the paths still go out first.
+        surface.bracketedPasteMode { [weak self] bracketed in
+            guard let self else { return }
+            if bracketed {
+                self.bridge?.send(data: Data("\u{001B}[200~\(text)\u{001B}[201~".utf8))
+            } else {
+                self.bridge?.send(data: Data(text.utf8))
+            }
+            self.releaseUploadHold()
+        }
+    }
+
+    private func releaseUploadHold() {
         uploadBatches = max(0, uploadBatches - 1)
         if uploadBatches == 0 {
             uploadBanner.isHidden = true
@@ -463,25 +444,15 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
                 heldInput.removeAll()
             }
         }
-        surface.window?.makeFirstResponder(surface)
+        surface.focusTerminal()
     }
 
     private func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-        sendSize(cols: newCols, rows: newRows)
-    }
-
-    func setTerminalTitle(source: TerminalView, title: String) {
-        guard isActive else { return }
-        view.window?.title = "\(tabTitle) · \(title)"
-    }
-
-    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
-
-    func send(source: TerminalView, data: ArraySlice<UInt8>) {
+    /// Keystrokes (and a program's mouse reports) on their way out.
+    private func handleInput(_ data: Data) {
         // A key on a dead connection reconnects instead of failing; the key
         // itself is dropped, since the user cannot see where it would land.
         if connectionState == .error {
@@ -489,34 +460,11 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
             return
         }
         if uploadBatches > 0 {
-            heldInput.append(contentsOf: data)
+            heldInput.append(data)
             return
         }
-        bridge?.send(data: Data(data))
+        bridge?.send(data: data)
     }
-
-    func scrolled(source: TerminalView, position: Double) {}
-
-    func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
-        if let url = URL(string: link) {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    func bell(source: TerminalView) {
-        NSSound.beep()
-    }
-
-    func clipboardCopy(source: TerminalView, content: Data) {
-        if let text = String(data: content, encoding: .utf8) {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
-        }
-    }
-
-    func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
-
-    func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
 }
 
 /// Main-queue-only flag shared between an upload and its progress callbacks.
