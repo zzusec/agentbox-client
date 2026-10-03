@@ -965,6 +965,8 @@ struct AppSmokeChecks {
         precondition(appMenu.items.first!.title.hasPrefix("版本 "),
                      "the version belongs in the menu, not only behind 关于")
         precondition(appMenu.items.first!.action == nil, "the version line is a label, not a command")
+        precondition(!appMenu.items.contains { $0.title.hasPrefix("关于") },
+                     "关于 is gone: the version line replaced it")
         guard let settings = appMenu.items.first(where: { $0.title == "设置…" }), let action = settings.action else {
             preconditionFailure("the app menu must offer 设置…")
         }

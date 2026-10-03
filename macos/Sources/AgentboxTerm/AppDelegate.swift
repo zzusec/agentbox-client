@@ -50,12 +50,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appItem.submenu = appMenu
 
         // A label, not a command: no action means the menu keeps it greyed out.
+        // It replaces 关于, which existed only to show this one line.
         appMenu.addItem(NSMenuItem(title: versionLabel, action: nil, keyEquivalent: ""))
-        appMenu.addItem(
-            withTitle: "关于 agentbox-client",
-            action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
-            keyEquivalent: ""
-        )
         appMenu.addItem(.separator())
 
         // No target: ⌘, travels the responder chain to the window's controller,
