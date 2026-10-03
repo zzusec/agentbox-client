@@ -108,18 +108,31 @@ func agentTermCommand(env []string, project, command, workspace string) string {
 		shellQuote(agentTmuxSession(project))+" "+shellQuote(run))
 }
 
-// tmuxAttach execs tmux with args (already shell-quoted), on tmux's
-// usual alternate screen.
+// tmuxNoAltScreen tells tmux not to switch the client terminal to its
+// alternate screen. On the alternate screen everything tmux scrolls away is
+// lost to the outer terminal, so the Mac app's scrollbar and the browser's
+// scrollback have nothing to show; on the normal screen lines that scroll off
+// the top land in the outer terminal's own history, where wheel, scrollbar and
+// local selection all work.
+const tmuxNoAltScreen = ",*:smcup@:rmcup@"
+
+// tmuxAttach execs tmux with args (already shell-quoted). The override is a
+// server option and only reaches clients that attach after it is set, so it is
+// set ahead of the attach: appended once on a running server (checked first, or
+// every connection would append another copy), or as the first command of the
+// same invocation when this attach is what starts the server.
 //
-// v0.1.7-custom18/19 appended terminal-overrides ",*:smcup@:rmcup@" so the
-// outer terminal kept a scrollback, but tmux's redraws on the normal screen
-// left fragments of full-screen UIs (Claude Code's prompt box and spinner)
-// in the middle of the client's view. tmux servers started by those builds
-// still carry the override, and it is applied when a client attaches, so it
-// is reset to the (empty) default before attaching.
+// This was tried in v0.1.7-custom18, reverted in custom21 because full-screen
+// UIs left fragments mid-view, and is being tried again: that smearing has
+// since been traced to the client — SwiftTerm counted columns two different
+// ways and the size sent here flipped between them (macOS v0.2.27), and the
+// view had stopped repainting anything the terminal did not mark dirty (macOS
+// v0.2.23). Neither had anything to do with the alternate screen. If the
+// fragments come back on a client carrying both fixes, this goes for good and
+// the scrollback moves to tmux's own copy-mode instead.
 func tmuxAttach(args string) string {
-	return "if tmux show-options -sv terminal-overrides 2>/dev/null | grep -qF 'smcup@'; then exec tmux -u set-option -su terminal-overrides \\; " + args + "; fi\n" +
-		"exec tmux -u " + args
+	return "if tmux show-options -sv terminal-overrides 2>/dev/null | grep -qF 'smcup@'; then exec tmux -u " + args + "; fi\n" +
+		"exec tmux -u start-server \\; set-option -sa terminal-overrides " + shellQuote(tmuxNoAltScreen) + " \\; " + args
 }
 
 // agentTmuxSession avoids tmux's separator characters and keeps names stable

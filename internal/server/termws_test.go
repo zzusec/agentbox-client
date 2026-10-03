@@ -247,10 +247,10 @@ func TestShellTermCommandIsolatesTabs(t *testing.T) {
 	}
 }
 
-// TestTmuxAttachAvoidsTheAlternateScreen runs the generated script against a
-// stand-in tmux: the first attach must set the override before attaching, and
-// a later one must not append it again.
-func TestTmuxAttachClearsTheNoAltScreenOverride(t *testing.T) {
+// TestTmuxAttachKeepsClientsOffTheAlternateScreen runs the generated script
+// against a stand-in tmux: the first attach must set the override before
+// attaching, and a later one must not append it again.
+func TestTmuxAttachKeepsClientsOffTheAlternateScreen(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "calls")
 	state := filepath.Join(dir, "has-override")
@@ -276,14 +276,16 @@ echo >> ` + logPath + `
 		raw, _ := os.ReadFile(logPath)
 		return string(raw)
 	}
-	if plain := run(); strings.Contains(plain, "terminal-overrides") || !strings.HasSuffix(plain, "\n-u|new-session|-A|-D|-s|main|\n") {
-		t.Fatalf("attach without override = %q", plain)
+	first := run()
+	want := "-u|start-server|;|set-option|-sa|terminal-overrides|" + tmuxNoAltScreen + "|;|new-session|-A|-D|-s|main|"
+	if !strings.Contains(first, want) {
+		t.Fatalf("first attach = %q, want %q", first, want)
 	}
 	if err := os.WriteFile(state, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	want := "-u|set-option|-su|terminal-overrides|;|new-session|-A|-D|-s|main|"
-	if again := run(); !strings.Contains(again, want) {
-		t.Fatalf("attach on a server with the override = %q, want %q", again, want)
+	// A server that already carries it must not get a second copy appended.
+	if again := run(); strings.Contains(again, "set-option") || !strings.Contains(again, "-u|new-session|-A|-D|-s|main|") {
+		t.Fatalf("later attach = %q", again)
 	}
 }
