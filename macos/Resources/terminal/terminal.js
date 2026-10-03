@@ -158,6 +158,10 @@
       settings = Object.assign({}, settings, next);
       term.options.theme = settings.theme;
       term.options.fontFamily = settings.fontFamily;
+      // Cursor and line spacing follow the profile too when it says so.
+      if (settings.cursorStyle) term.options.cursorStyle = settings.cursorStyle;
+      if (typeof settings.cursorBlink === "boolean") term.options.cursorBlink = settings.cursorBlink;
+      if (settings.lineHeight > 0) term.options.lineHeight = settings.lineHeight;
       document.body.style.background = settings.theme.background || "";
       if (settings.mouse === "off" && !wasOff) {
         // A program that already turned tracking on keeps it until it says

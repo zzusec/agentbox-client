@@ -11,4 +11,4 @@ sh "$root/scripts/stage-terminal-assets.sh" "$scratch/terminal"
   find "$root/Sources/AgentboxTerm" -name '*.swift' ! -name main.swift -print0
   printf '%s\0' "$root/scripts/app_smoke_checks.swift"
 } | xargs -0 swiftc -parse-as-library -o "$scratch/check"
-AGENTBOX_TERMINAL_ASSETS="$scratch/terminal" "$scratch/check"
+AGENTBOX_TERMINAL_ASSETS="$scratch/terminal" AGENTBOX_IGNORE_TERMINAL_APP=1 "$scratch/check"

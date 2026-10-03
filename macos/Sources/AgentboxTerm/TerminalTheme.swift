@@ -77,6 +77,33 @@ enum TerminalThemeManager {
     private static let customSchemeKey = "agentbox.terminal.custom-scheme"
 
     static let customSchemeID = "custom"
+    /// Follows Terminal.app's default profile — colours, font and size alike.
+    static let terminalAppSchemeID = "terminal-app"
+    private static let followedTerminalAppKey = "agentbox.terminal.followed-terminal-app"
+
+    /// Terminal.app's default profile, read once per launch and again whenever
+    /// the settings sheet opens (that is where a changed profile would be
+    /// looked for).
+    private(set) static var terminalAppProfile: TerminalAppProfile? = TerminalAppProfile.load()
+
+    static func reloadTerminalAppProfile() {
+        terminalAppProfile = TerminalAppProfile.load()
+    }
+
+    /// Whether the terminal currently takes everything from Terminal.app.
+    static var followsTerminalApp: Bool {
+        terminalAppProfile != nil && current.id == terminalAppSchemeID
+    }
+
+    /// Once per install: switch to following Terminal.app, which is the look
+    /// people expect from a terminal on this Mac. Every other choice made later
+    /// in the settings sheet stands.
+    static func adoptTerminalAppOnce() {
+        guard terminalAppProfile != nil,
+              !UserDefaults.standard.bool(forKey: followedTerminalAppKey) else { return }
+        UserDefaults.standard.set(true, forKey: followedTerminalAppKey)
+        select(terminalAppSchemeID)
+    }
 
     /// Used when no scheme has been chosen yet, and as the fallback for an
     /// unknown stored id. First in `schemes`, so the card grid leads with it.
@@ -151,13 +178,17 @@ enum TerminalThemeManager {
             name: "自定义",
             detail: "点击基于当前配色创建专属配色"
         )
-        return schemes + [placeholder]
+        let followed = terminalAppProfile.map { [$0.scheme] } ?? []
+        return followed + schemes + [placeholder]
     }
 
     static var current: TerminalScheme {
         let id = UserDefaults.standard.string(forKey: schemeKey)
         if id == customSchemeID, let custom = customScheme {
             return custom
+        }
+        if id == nil || id == terminalAppSchemeID, let profile = terminalAppProfile {
+            return profile.scheme
         }
         return schemes.first { $0.id == id }
             ?? schemes.first { $0.id == defaultSchemeID }
@@ -301,23 +332,43 @@ enum TerminalThemeManager {
         for (index, name) in names.enumerated() where index < scheme.ansi.count {
             theme[name] = scheme.ansi[index]
         }
-        return [
+        var settings: [String: Any] = [
             "theme": theme,
             "fontFamily": cssFontFamily,
             "fontSize": Double(fontSize),
             "autoFit": autoFontSize,
             "fitColumns": fitColumns,
             "mouse": mouseMode.rawValue,
+            "cursorStyle": "block",
+            "cursorBlink": true,
+            "lineHeight": 1.0,
         ]
+        if followsTerminalApp, let profile = terminalAppProfile {
+            // Everything Terminal.app decides, not just the colours.
+            if let family = profile.cssFontFamily {
+                settings["fontFamily"] = family + ", " + cjkFallbacks
+            }
+            if let size = profile.fontSize, size > 0 { settings["fontSize"] = size }
+            if let selection = profile.selection { theme["selectionBackground"] = selection }
+            settings["theme"] = theme
+            if let style = profile.cursorStyle { settings["cursorStyle"] = style }
+            if let blink = profile.cursorBlink { settings["cursorBlink"] = blink }
+            if let spacing = profile.lineSpacing { settings["lineHeight"] = spacing }
+        }
+        return settings
     }
 
     /// The chosen family for CSS, followed by the CJK fonts the native cascade
     /// used to fall back on, then any monospaced font.
     static var cssFontFamily: String {
         let family = fontFamily.resolvedName.flatMap { NSFont(name: $0, size: 13)?.familyName } ?? "Monaco"
-        let names = [family, "PingFang SC", "PingFang TC", "Hiragino Sans", "Apple SD Gothic Neo", "Apple Color Emoji"]
-        return names.map { "\"\($0)\"" }.joined(separator: ", ") + ", monospace"
+        return "\"\(family)\", " + cjkFallbacks
     }
+
+    /// The CJK faces the native cascade used to fall back on, then any
+    /// monospaced font.
+    private static let cjkFallbacks = ["PingFang SC", "PingFang TC", "Hiragino Sans", "Apple SD Gothic Neo", "Apple Color Emoji"]
+        .map { "\"\($0)\"" }.joined(separator: ", ") + ", monospace"
 
     /// The terminal font: the chosen family with the CJK fallback cascade.
     static func font() -> NSFont {

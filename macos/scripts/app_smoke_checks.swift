@@ -740,6 +740,47 @@ struct AppSmokeChecks {
 
     /// A redeployed server makes the client look for its own update — but only
     /// on a change, and never by comparing the two version lines.
+    /// Terminal.app's profile is read from its archive: the font by name and
+    /// size even when this process could not load that face (SF Mono Terminal
+    /// lives inside Terminal.app), the colours as sRGB, cursor and spacing as
+    /// stored, and unset ANSI colours from Terminal.app's own palette.
+    @MainActor
+    static func terminalAppProfileChecks() throws {
+        func archive(_ object: Any) throws -> Data {
+            try NSKeyedArchiver.archivedData(withRootObject: object, requiringSecureCoding: false)
+        }
+        // An NSFont archive names its face; build one for a face that exists
+        // here, then rewrite the name to one that does not.
+        let real = try archive(NSFont(name: "Menlo-Regular", size: 12)!)
+        var plist = try PropertyListSerialization.propertyList(from: real, format: nil) as! [String: Any]
+        var objects = plist["$objects"] as! [Any]
+        for (index, object) in objects.enumerated() {
+            if let text = object as? String, text == "Menlo-Regular" {
+                objects[index] = "SFMonoTerminal-Regular"
+            }
+        }
+        plist["$objects"] = objects
+        let fontData = try PropertyListSerialization.data(fromPropertyList: plist, format: .binary, options: 0)
+
+        let settings: [String: Any] = [
+            "Font": fontData,
+            "BackgroundColor": try archive(NSColor(srgbRed: 0x19 / 255, green: 0x1D / 255, blue: 0x27 / 255, alpha: 0.95)),
+            "TextColor": try archive(NSColor(srgbRed: 0xE0 / 255, green: 0xE0 / 255, blue: 0xE0 / 255, alpha: 1)),
+            "ANSIRedColor": try archive(NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)),
+            "CursorType": 0,
+            "CursorBlink": false,
+        ]
+        let profile = TerminalAppProfile.parse(settings, name: "Clear Dark")
+        precondition(profile.fontName == "SFMonoTerminal-Regular", "font name: \(profile.fontName ?? "nil")")
+        precondition(profile.fontSize == 12, "font size: \(profile.fontSize ?? 0)")
+        precondition(profile.cssFontFamily == "ui-monospace", "SF Mono Terminal must map to the system SF Mono")
+        precondition(profile.background == "#191D27" && profile.foreground == "#E0E0E0", "colours: \(profile.background) \(profile.foreground)")
+        precondition(profile.ansi[1] == "#FF0000", "a set ANSI colour is used")
+        precondition(profile.ansi[0] == TerminalAppProfile.basicANSI[0], "an unset one falls back to Terminal.app's palette")
+        precondition(profile.cursorStyle == "block" && profile.cursorBlink == false)
+        precondition(profile.scheme.id == TerminalThemeManager.terminalAppSchemeID)
+    }
+
     /// The terminal is xterm.js in a web view. This drives it end to end: the
     /// page comes up and reports a size, output reaches it, typing comes back
     /// out, a selection copies, and the native parts are wired — the context
@@ -852,6 +893,7 @@ struct AppSmokeChecks {
         settingsSheetChecks()
         try await projectSettingsChecks()
         launchAndSyncEventChecks()
+        try terminalAppProfileChecks()
         try await webTerminalChecks()
         precondition(URLProtocol.registerClass(AppHTTPFixture.self))
         let client = AgentboxClient(server: URL(string: "https://agentbox-app-fixture.invalid")!, user: "synthetic-app-user", token: "synthetic-app-token")
@@ -1041,7 +1083,7 @@ struct AppSmokeChecks {
             controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
-        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, native workspace loading, stale responses/errors, loading isolation, terminal URLs, the xterm.js terminal (size, output, copy, menu), the sidebar following the tab in front, sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, a bar-free upload banner, the app menu's version and 设置… entry, the server-version update trigger, and removed sync panel")
+        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, native workspace loading, stale responses/errors, loading isolation, terminal URLs, reading Terminal.app's profile, the xterm.js terminal (size, output, copy, menu), the sidebar following the tab in front, sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, a bar-free upload banner, the app menu's version and 设置… entry, the server-version update trigger, and removed sync panel")
         if ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_KEEP_OPEN"] == "1" {
             try await Task.sleep(nanoseconds: 120_000_000_000)
         }

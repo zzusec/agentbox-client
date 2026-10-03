@@ -8,6 +8,8 @@ final class TerminalSettingsViewController: NSViewController {
     private var cards: [SchemeCardView] = []
     private var editor: CustomSchemeEditorView?
     private var fontPopup: NSPopUpButton?
+    private var fontSegment: NSSegmentedControl?
+    private var fontHint: NSTextField?
     private var fontPreview: NSTextField?
     private var mouseSegment: NSSegmentedControl?
     private var mouseHint: NSTextField?
@@ -76,7 +78,8 @@ final class TerminalSettingsViewController: NSViewController {
         self.editor = editor
 
         let fontLabel = sectionLabel("终端字体")
-        let fontHint = sectionHint("字体族仅列出本机已安装的等宽字体；中文等宽字符始终有苹方等回退。")
+        let fontHint = sectionHint("")
+        self.fontHint = fontHint
         let fontPopup = NSPopUpButton()
         for family in TerminalThemeManager.installedFontFamilies {
             fontPopup.addItem(withTitle: family.displayName)
@@ -104,6 +107,7 @@ final class TerminalSettingsViewController: NSViewController {
             labels: Self.fontSizes.map(\.0), trackingMode: .selectOne, target: self,
             action: #selector(fontSizeChanged(_:))
         )
+        self.fontSegment = fontSegment
 
         let fitLabel = sectionLabel("自动字号")
         let fitHint = sectionHint("窗口放不下目标列数时自动缩小字号（不超过上面选的字号，最小 8pt），避免 TUI 把内容截断。")
@@ -203,7 +207,25 @@ final class TerminalSettingsViewController: NSViewController {
         refreshSelection()
     }
 
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        // A profile changed in Terminal.app since launch is picked up here.
+        TerminalThemeManager.reloadTerminalAppProfile()
+        refreshSelection()
+    }
+
     private func refreshSelection() {
+        // While following Terminal.app, the profile decides font and size;
+        // the controls stay visible but cannot fight it.
+        let follows = TerminalThemeManager.followsTerminalApp
+        fontPopup?.isEnabled = !follows
+        fontSegment?.isEnabled = !follows
+        if follows, let profile = TerminalThemeManager.terminalAppProfile {
+            let font = [profile.fontName, profile.fontSize.map { "\(Int($0)) 号" }].compactMap { $0 }.joined(separator: " ")
+            fontHint?.stringValue = "跟随 Terminal.app「\(profile.name)」\(font.isEmpty ? "" : "：\(font)")。选其他配色后可单独设置字体和字号。"
+        } else {
+            fontHint?.stringValue = "字体族仅列出本机已安装的等宽字体；中文等宽字符始终有苹方等回退。"
+        }
         let current = TerminalThemeManager.current
         for card in cards {
             if card.scheme.id == TerminalThemeManager.customSchemeID {

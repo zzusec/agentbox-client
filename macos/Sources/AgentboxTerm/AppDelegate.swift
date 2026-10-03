@@ -16,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        // Look like Terminal.app unless the user has since chosen otherwise.
+        TerminalThemeManager.adoptTerminalAppOnce()
         loadApplicationIcon()
         UpdateManager.shared.start()
         if let saved = savedConnection() {
