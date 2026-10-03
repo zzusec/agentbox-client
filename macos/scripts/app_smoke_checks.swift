@@ -940,6 +940,21 @@ struct AppSmokeChecks {
             project: RemoteProject(id: "p-focus", name: "focused", path: "/w/focused")
         )
         precondition(focusedTab.project.name == "focused")
+        // The sidebar follows the tab in front: Beta's tab highlights Beta's
+        // row, and bringing another tab forward moves the highlight — quietly,
+        // because a hand-picked row opens that project's AI session, and that
+        // would have pulled Beta's tab straight back to the front.
+        let betaTab = grid.add(
+            client: client, workspace: beta,
+            project: RemoteProject(id: "beta-project", name: "Beta project", path: "/workspace/Beta project")
+        )
+        precondition(table.selectedRow == 0, "the row of the tab in front must be highlighted")
+        grid.select(focusedTab)
+        precondition(table.selectedRow == -1, "a project missing from the list leaves no row highlighted")
+        grid.select(betaTab)
+        precondition(table.selectedRow == 0, "switching tabs must move the highlight back")
+        grid.select(focusedTab)
+        grid.remove(betaTab)
         controller.handleSyncEvent(progressEvent("focused", 3))
         controller.handleSyncEvent(progressEvent("other", 7))
         precondition(controller.syncStatusText.hasPrefix("focused ·"),
@@ -1026,7 +1041,7 @@ struct AppSmokeChecks {
             controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
-        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, native workspace loading, stale responses/errors, loading isolation, terminal URLs, the xterm.js terminal (size, output, copy, menu), sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, a bar-free upload banner, the app menu's version and 设置… entry, the server-version update trigger, and removed sync panel")
+        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, native workspace loading, stale responses/errors, loading isolation, terminal URLs, the xterm.js terminal (size, output, copy, menu), the sidebar following the tab in front, sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, a bar-free upload banner, the app menu's version and 设置… entry, the server-version update trigger, and removed sync panel")
         if ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_KEEP_OPEN"] == "1" {
             try await Task.sleep(nanoseconds: 120_000_000_000)
         }

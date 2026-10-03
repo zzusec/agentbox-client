@@ -431,6 +431,9 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
     private func showProjects(_ projects: [RemoteProject]) {
         knownProjects = projects.map(\.name)
         sidebar.setProjects(projects)
+        // Reloading the list drops its selection; put the highlight back on
+        // the project whose terminal is in front.
+        sidebar.highlightProject(named: focusedProject)
     }
 
     private func setProjectStatus(_ project: String, _ line: StatusLine) {
@@ -441,6 +444,9 @@ final class MainViewController: NSViewController, NSToolbarDelegate, NSSplitView
 
     /// Follows the tab in front, so the bar reports that project's sync.
     private func focus(project: String?) {
+        // The sidebar mirrors the tab in front, always — also when the focus
+        // has not changed but the list was rebuilt underneath it.
+        sidebar.highlightProject(named: project)
         guard focusedProject != project else { return }
         focusedProject = project
         renderStatus()

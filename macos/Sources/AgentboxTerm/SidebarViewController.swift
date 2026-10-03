@@ -300,9 +300,31 @@ final class SidebarViewController: NSViewController, NSTableViewDataSource, NSTa
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
+        guard !followingTerminal else { return }
         let row = projectTable.selectedRow
         guard row >= 0, row < projects.count else { return }
         onSelectProject?(projects[row])
+    }
+
+    /// Set while the highlight is being moved to match the terminal in front.
+    private var followingTerminal = false
+
+    /// Highlights the project the terminal in front belongs to (none: no row).
+    ///
+    /// Silently: selecting a row by hand opens that project's AI session, and
+    /// doing that here would pull a shell tab of the same project — or any
+    /// other tab — out from under the user.
+    func highlightProject(named name: String?) {
+        let row = name.flatMap { name in projects.firstIndex { $0.name == name } }
+        guard row != (projectTable.selectedRow >= 0 ? projectTable.selectedRow : nil) else { return }
+        followingTerminal = true
+        defer { followingTerminal = false }
+        if let row {
+            projectTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            projectTable.scrollRowToVisible(row)
+        } else {
+            projectTable.deselectAll(nil)
+        }
     }
 
     @objc private func workspaceChanged() {
