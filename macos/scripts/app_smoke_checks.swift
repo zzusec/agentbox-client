@@ -1012,7 +1012,7 @@ struct AppSmokeChecks {
             controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
-        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, the xterm.js terminal (size, output, copy, menu), sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, the input-method preview, a bar-free upload banner, the app menu's version and 设置… entry, auto font fitting, terminal width agreement, wheel forwarding, the server-version update trigger, and removed sync panel")
+        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, native workspace loading, stale responses/errors, loading isolation, terminal URLs, the xterm.js terminal (size, output, copy, menu), sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, a bar-free upload banner, the app menu's version and 设置… entry, the server-version update trigger, and removed sync panel")
         if ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_KEEP_OPEN"] == "1" {
             try await Task.sleep(nanoseconds: 120_000_000_000)
         }
