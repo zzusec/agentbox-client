@@ -621,6 +621,7 @@ struct AppSmokeChecks {
         appMenuChecks()
         fontFitChecks()
         terminalWidthAgreementChecks()
+        wheelForwardingChecks()
         serverVersionTriggerChecks()
         // Uploads report progress as text in the banner; a progress bar over
         // the terminal was one more thing covering the output.
@@ -975,6 +976,47 @@ struct AppSmokeChecks {
         precondition(MainViewController.instancesRespond(to: action), "nothing implements the 设置… action")
     }
 
+    /// The wheel reaches a program that tracks the mouse.
+    ///
+    /// A full-screen program draws on the alternate screen, where nothing
+    /// scrolls away, so scrolling the local buffer did nothing at all and an
+    /// agent terminal could not be scrolled back. Programs that want the wheel
+    /// say so by turning on mouse tracking; clicks and drags still stay local,
+    /// which is what keeps selection and copy working.
+    @MainActor
+    static func wheelForwardingChecks() {
+        let stub = MouseDelegateStub()
+        let surface = TerminalSurface(
+            frame: NSRect(x: 0, y: 0, width: 400, height: 300),
+            font: NativeTheme.terminalFont()
+        )
+        surface.terminalDelegate = stub
+        surface.layoutSubtreeIfNeeded()
+
+        func wheel(up: Bool) {
+            let source = CGEventSource(stateID: .privateState)
+            let scroll = CGEvent(
+                scrollWheelEvent2Source: source, units: .line, wheelCount: 1,
+                wheel1: up ? 3 : -3, wheel2: 0, wheel3: 0
+            )!
+            surface.scrollWheel(with: NSEvent(cgEvent: scroll)!)
+        }
+
+        // Nothing is tracking the mouse: the wheel stays local.
+        wheel(up: true)
+        precondition(stub.received.isEmpty, "with no mouse tracking the wheel must not reach the program")
+
+        // Button tracking with SGR encoding, which is what the agent TUI asks for.
+        surface.feed(text: "\u{1B}[?1000h\u{1B}[?1006h")
+        wheel(up: true)
+        let up = stub.received.map { String(decoding: $0, as: UTF8.self) }.joined()
+        precondition(up.contains("<64;"), "wheel up must be reported as button 64: \(up)")
+        stub.received.removeAll()
+        wheel(up: false)
+        let down = stub.received.map { String(decoding: $0, as: UTF8.self) }.joined()
+        precondition(down.contains("<65;"), "wheel down must be reported as button 65: \(down)")
+    }
+
     /// The two paths that decide how many columns the terminal has must agree.
     ///
     /// SwiftTerm counts columns in two places: when the font changes, and when
@@ -1260,7 +1302,7 @@ struct AppSmokeChecks {
             controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
-        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, the input-method preview, a bar-free upload banner, the app menu's version and 设置… entry, auto font fitting, terminal width agreement, the server-version update trigger, and removed sync panel")
+        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, the input-method preview, a bar-free upload banner, the app menu's version and 设置… entry, auto font fitting, terminal width agreement, wheel forwarding, the server-version update trigger, and removed sync panel")
         if ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_KEEP_OPEN"] == "1" {
             try await Task.sleep(nanoseconds: 120_000_000_000)
         }

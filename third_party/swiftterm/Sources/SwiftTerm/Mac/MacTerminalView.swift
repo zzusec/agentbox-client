@@ -1141,6 +1141,32 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         if event.deltaY == 0 {
             return
         }
+        // agentbox: hand the wheel to a program that is tracking the mouse.
+        //
+        // Scrolling the local buffer is useless to a full-screen program: it
+        // draws on the alternate screen, where nothing scrolls away, so the
+        // wheel did nothing at all in an agent terminal. Such programs — and
+        // tmux with `mouse on` — ask for mouse events precisely so they can
+        // scroll their own view, and every other terminal forwards the wheel to
+        // them. Clicks and drags deliberately do not follow this path: they
+        // stay local (allowMouseReporting is off by default) so that selecting
+        // and copying keep working.
+        if terminal.mouseMode != .off {
+            let hit = calculateMouseHit(with: event)
+            let flags = terminal.encodeButton(
+                button: event.deltaY > 0 ? 4 : 5, release: false,
+                shift: event.modifierFlags.contains(.shift),
+                meta: event.modifierFlags.contains(.option),
+                control: event.modifierFlags.contains(.control))
+            // One notch is one event; a fast flick sends a few, capped so a
+            // single gesture cannot flood the program with hundreds.
+            let notches = max (1, min (10, Int (abs (event.deltaY).rounded())))
+            for _ in 0..<notches {
+                terminal.sendEvent(buttonFlags: flags, x: hit.grid.col, y: hit.grid.row,
+                                   pixelX: hit.pixels.col, pixelY: hit.pixels.row)
+            }
+            return
+        }
         let velocity = calcScrollingVelocity(delta: Int (abs (event.deltaY)))
         if event.deltaY > 0 {
             scrollUp (lines: velocity)
