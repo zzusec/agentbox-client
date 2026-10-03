@@ -52,13 +52,15 @@ struct TerminalFontFamily: Identifiable {
 /// - on: always report when the app asked for mouse (vim/tmux clicks work).
 /// - smart: report like `on`, but holding ⇧ makes the gesture select locally.
 enum TerminalMouseMode: String {
-    case off, on, smart
+    case off, on
+    /// Stored by versions that had a third mode; it behaved exactly like `on`
+    /// does now, since ⇧ bypasses reporting in every mode.
+    static let legacySmart = "smart"
 
     var label: String {
         switch self {
         case .off: return "关闭"
         case .on: return "开启"
-        case .smart: return "⇧ 拖选"
         }
     }
 }
@@ -293,7 +295,9 @@ enum TerminalThemeManager {
     // MARK: Mouse reporting
 
     static var mouseMode: TerminalMouseMode {
-        TerminalMouseMode(rawValue: UserDefaults.standard.string(forKey: mouseModeKey) ?? "") ?? .off
+        let stored = UserDefaults.standard.string(forKey: mouseModeKey) ?? ""
+        if stored == TerminalMouseMode.legacySmart { return .on }
+        return TerminalMouseMode(rawValue: stored) ?? .off
     }
 
     static func update(mouseMode: TerminalMouseMode) {

@@ -119,7 +119,7 @@ final class TerminalSettingsViewController: NSViewController {
 
         let mouseLabel = sectionLabel("鼠标上报")
         let mouseHint = sectionHint("")
-        let modes: [TerminalMouseMode] = [.off, .on, .smart]
+        let modes: [TerminalMouseMode] = [.off, .on]
         let mouseSegment = NSSegmentedControl(
             labels: modes.map(\.label), trackingMode: .selectOne, target: self,
             action: #selector(mouseModeChanged(_:))
@@ -231,7 +231,7 @@ final class TerminalSettingsViewController: NSViewController {
         fitColumnsSegment?.selectedSegment =
             Self.fitColumnChoices.firstIndex(of: TerminalThemeManager.fitColumns) ?? 1
 
-        let modes: [TerminalMouseMode] = [.off, .on, .smart]
+        let modes: [TerminalMouseMode] = [.off, .on]
         let mode = TerminalThemeManager.mouseMode
         if let mouseSegment {
             mouseSegment.selectedSegment = modes.firstIndex(of: mode) ?? 0
@@ -241,9 +241,7 @@ final class TerminalSettingsViewController: NSViewController {
             case .off:
                 return "鼠标事件不转发给终端应用：拖动即选中，⌘C 复制，滚轮滚动本地缓冲（默认）。"
             case .on:
-                return "点击/拖动转发给 TUI 应用（vim、tmux 等）；此时本地拖选会被应用接管。"
-            case .smart:
-                return "同「开启」，但按住 ⇧ 拖动可本地选中复制，普通点击仍转发给应用。"
+                return "点击/拖动转发给 TUI 应用（vim、tmux 等）；按住 ⇧ 拖动仍是本地选中，⌘C 可复制。"
             }
         }()
     }
@@ -278,7 +276,7 @@ final class TerminalSettingsViewController: NSViewController {
     }
 
     @objc private func mouseModeChanged(_ sender: NSSegmentedControl) {
-        let modes: [TerminalMouseMode] = [.off, .on, .smart]
+        let modes: [TerminalMouseMode] = [.off, .on]
         guard sender.selectedSegment >= 0, sender.selectedSegment < modes.count else { return }
         TerminalThemeManager.update(mouseMode: modes[sender.selectedSegment])
         refreshSelection()

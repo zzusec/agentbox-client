@@ -262,10 +262,11 @@ struct AppSmokeChecks {
         defaults.set("monaco", forKey: familyKey)
         precondition(TerminalThemeManager.fontFamily.id == "monaco")
 
-        // Mouse mode: default off, three states persist, surface applies live.
+        // Mouse mode: default off, two states persist, surface applies live.
         precondition(TerminalThemeManager.mouseMode == .off)
-        TerminalThemeManager.update(mouseMode: .smart)
-        precondition(TerminalThemeManager.mouseMode == .smart)
+        // The old third mode is read as 开启, which now does what it did.
+        defaults.set(TerminalMouseMode.legacySmart, forKey: "agentbox.terminal.mouse-mode")
+        precondition(TerminalThemeManager.mouseMode == .on, "a stored 智能 must read as 开启")
         TerminalThemeManager.update(mouseMode: .on)
         precondition(TerminalThemeManager.mouseMode == .on)
         let surface = TerminalSurface(frame: NSRect(x: 0, y: 0, width: 400, height: 300), font: nil)
@@ -331,12 +332,12 @@ struct AppSmokeChecks {
         // Mouse segment drives TerminalThemeManager.mouseMode.
         let segments = all.compactMap { $0 as? NSSegmentedControl }
         let mouseSegment = segments.first {
-            $0.label(forSegment: 2) == "⇧ 拖选"
+            $0.segmentCount == 2 && $0.label(forSegment: 1) == "开启"
         }
         precondition(mouseSegment != nil, "mouse mode segment missing")
-        mouseSegment!.selectedSegment = 2
+        mouseSegment!.selectedSegment = 1
         precondition(NSApp.sendAction(mouseSegment!.action!, to: mouseSegment!.target, from: mouseSegment!))
-        precondition(TerminalThemeManager.mouseMode == .smart)
+        precondition(TerminalThemeManager.mouseMode == .on)
 
         // Font popup drives the font family choice. Two popups live in the
         // sheet (the editor's "copy preset" one included), so tell them apart
@@ -425,8 +426,9 @@ struct AppSmokeChecks {
         post(.leftMouseUp, shift: false)
         try await settle()
 
-        // "smart" + shift: the whole gesture stays local, then recovers.
-        TerminalThemeManager.update(mouseMode: .smart)
+        // 开启 + shift: the whole gesture stays local, then recovers. This is
+        // the only way to select (and so copy) while a program has the mouse.
+        TerminalThemeManager.update(mouseMode: .on)
         surface.applyMouseMode()
         let before = stub.received.count
         post(.leftMouseDown, shift: true)

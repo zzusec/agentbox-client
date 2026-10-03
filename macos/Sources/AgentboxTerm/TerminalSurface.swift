@@ -122,7 +122,12 @@ final class TerminalSurface: TerminalView {
         ) { [weak self] event in
             guard let self, event.window === self.window else { return event }
             self.noteSelectionGesture(event)
-            guard TerminalThemeManager.mouseMode == .smart else { return event }
+            // ⇧ always means "this gesture is mine, not the program's". It used
+            // to work only in the 智能 mode, so with 开启 there was no way to
+            // select anything at all: the drag went to the program, which drew
+            // its own highlight, and the terminal had no selection for ⌘C to
+            // copy. With reporting off there is nothing to bypass.
+            guard TerminalThemeManager.mouseMode != .off else { return event }
             if event.type == .leftMouseDown {
                 self.mouseGestureBypassed = event.modifierFlags.contains(.shift)
             }
