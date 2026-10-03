@@ -52,7 +52,13 @@ extension TerminalView {
     {
         resetCaches()
         self.cellDimension = computeFontDimensions ()
-        let newCols = Int(frame.width / cellDimension.width)
+        // agentbox: the same effective width processSizeChange uses. This path
+        // measured the full frame instead, so changing the font produced one
+        // more column than resizing the view did — the two disagreed about the
+        // terminal's width, and with the font changing on its own (the client
+        // fits it to the window) the size sent to the remote flipped between
+        // the two, which is what made a full-screen TUI draw over itself.
+        let newCols = Int(getEffectiveWidth (size: frame.size) / cellDimension.width)
         let newRows = Int(frame.height / cellDimension.height)
         resize(cols: newCols, rows: newRows)
         updateCaretView()

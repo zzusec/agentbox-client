@@ -227,7 +227,10 @@ final class TerminalViewController: NSViewController, TerminalViewDelegate {
             size = TerminalFit.size(
                 base: base,
                 cellWidthAtBase: TerminalFit.cellWidth(of: TerminalThemeManager.font(size: base)),
-                width: surface.bounds.width,
+                // The scroller's strip is not usable width — SwiftTerm leaves
+                // it out when it counts columns, so the target column count has
+                // to be measured against the same width.
+                width: surface.bounds.width - TerminalFit.scrollerWidth,
                 columns: TerminalThemeManager.fitColumns
             )
         }

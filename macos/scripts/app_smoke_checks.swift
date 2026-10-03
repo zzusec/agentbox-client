@@ -620,6 +620,7 @@ struct AppSmokeChecks {
         inputMethodChecks()
         appMenuChecks()
         fontFitChecks()
+        terminalWidthAgreementChecks()
         serverVersionTriggerChecks()
         // Uploads report progress as text in the banner; a progress bar over
         // the terminal was one more thing covering the output.
@@ -972,6 +973,39 @@ struct AppSmokeChecks {
         precondition(MainViewController.instancesRespond(to: action), "nothing implements the 设置… action")
     }
 
+    /// The two paths that decide how many columns the terminal has must agree.
+    ///
+    /// SwiftTerm counts columns in two places: when the font changes, and when
+    /// the view is resized. One measured the whole frame and the other left out
+    /// the scroller's strip, so the count flipped between two values on every
+    /// layout pass. Each flip resized the remote terminal, and a redraw painted
+    /// for one width into a buffer of the other wraps — which is how a second,
+    /// offset copy of a full-screen TUI ended up on screen.
+    @MainActor
+    static func terminalWidthAgreementChecks() {
+        let surface = TerminalSurface(
+            frame: NSRect(x: 0, y: 0, width: 900, height: 400),
+            font: NativeTheme.terminalFont(size: 13)
+        )
+        let host = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 400),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        host.contentView = surface
+        surface.layoutSubtreeIfNeeded()
+
+        // The font path.
+        surface.font = NativeTheme.terminalFont(size: 12)
+        let afterFont = surface.getTerminal().cols
+        // The resize path, over the very same frame.
+        surface.frame = surface.frame
+        let afterResize = surface.getTerminal().cols
+        precondition(afterFont == afterResize,
+                     "changing the font gives \(afterFont) columns, resizing gives \(afterResize)")
+        precondition(afterFont > 0)
+        host.contentView = NSView()
+    }
+
     /// Input-method composition: the pinyin being typed is drawn locally at
     /// the caret, and it has to stay above SwiftTerm's caret view — that caret
     /// is a filled block over the very cell the composition starts at, and
@@ -1224,7 +1258,7 @@ struct AppSmokeChecks {
             controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
-        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, the input-method preview, a bar-free upload banner, the app menu's version and 设置… entry, auto font fitting, the server-version update trigger, and removed sync panel")
+        print("PASS: theme/scheme/font/mouse settings, settings sheet wiring, per-project sync settings and project menu, synthetic mouse gesture path, native workspace loading, stale responses/errors, loading isolation, terminal URLs, sidebar resizing/toggle, the sidebar's server clock, left-packed terminal tabs, the input-method preview, a bar-free upload banner, the app menu's version and 设置… entry, auto font fitting, terminal width agreement, the server-version update trigger, and removed sync panel")
         if ProcessInfo.processInfo.environment["AGENTBOX_APP_SMOKE_KEEP_OPEN"] == "1" {
             try await Task.sleep(nanoseconds: 120_000_000_000)
         }
